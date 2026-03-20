@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/entry.dart';
 import '../models/topic.dart';
+import '../models/topic_with_stats.dart';
 
 class DatabaseService {
   static const _databaseName = 'monolog.db';
@@ -88,6 +89,28 @@ class DatabaseService {
        ORDER BY t.is_pinned DESC, last_activity DESC
     ''');
     return rows.map((row) => Topic.fromMap(row)).toList();
+  }
+
+  /// Returns topics with entry count and last activity — used by the topic
+  /// list screen.
+  Future<List<TopicWithStats>> getTopicsWithStats() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT t.*,
+             COALESCE(MAX(e.created_at), t.updated_at) AS last_activity,
+             COUNT(e.id) AS entry_count
+        FROM topics t
+        LEFT JOIN entries e ON e.topic_id = t.id
+       GROUP BY t.id
+       ORDER BY t.is_pinned DESC, last_activity DESC
+    ''');
+    return rows.map((row) {
+      return TopicWithStats(
+        topic: Topic.fromMap(row),
+        entryCount: row['entry_count'] as int,
+        lastActivity: DateTime.parse(row['last_activity'] as String),
+      );
+    }).toList();
   }
 
   Future<Topic?> getTopicById(int id) async {

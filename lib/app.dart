@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'screens/topic_list_screen.dart';
+
 class MonologApp extends StatelessWidget {
   const MonologApp({super.key});
 
@@ -18,22 +20,7 @@ class MonologApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: const _PlaceholderHome(),
-    );
-  }
-}
-
-/// Temporary home screen — will be replaced in Stage 2 with TopicListScreen.
-class _PlaceholderHome extends StatelessWidget {
-  const _PlaceholderHome();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Monolog')),
-      body: const Center(
-        child: Text('Каркас готов. Следующий шаг — экран топиков.'),
-      ),
+      home: const TopicListScreen(),
     );
   }
 }
