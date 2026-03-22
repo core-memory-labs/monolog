@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/topic_with_stats.dart';
-import '../services/providers.dart';
+import 'providers.dart';
 
 /// Manages the list of topics with their stats.
 ///

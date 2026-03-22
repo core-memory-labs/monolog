@@ -17,6 +17,7 @@ dependencies:
   url_launcher: ^6.2.0
   share_plus: ^7.0.0
   image_picker: ^1.1.0
+  receive_sharing_intent: ^1.8.1
 
 dev_dependencies:
   flutter_test:
