@@ -6,17 +6,20 @@ import '../utils/date_format.dart';
 /// A single topic row in the topic list.
 ///
 /// Shows: title, entry count, last activity date, and a pin indicator.
-/// [onTap] is called for navigation, [onLongPress] to open the actions sheet.
+/// [onTap] is called for navigation, [onLongPress] to enter selection mode.
+/// When [isSelected] is true the tile gets a highlighted background.
 class TopicTile extends StatelessWidget {
   final TopicWithStats data;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
+  final bool isSelected;
 
   const TopicTile({
     super.key,
     required this.data,
     this.onTap,
     this.onLongPress,
+    this.isSelected = false,
   });
 
   @override
@@ -28,6 +31,9 @@ class TopicTile extends StatelessWidget {
     final dateLabel = formatRelativeDate(data.lastActivity);
 
     return ListTile(
+      selected: isSelected,
+      selectedTileColor:
+          theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
       leading: topic.isPinned
           ? Icon(Icons.push_pin, size: 20, color: theme.colorScheme.primary)
           : const SizedBox(width: 20),
