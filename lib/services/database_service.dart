@@ -3,14 +3,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/entry.dart';
-import '../models/entry_image.dart';
-import '../models/entry_with_images.dart';
+import '../models/entry_attachment.dart';
+import '../models/entry_with_attachment.dart';
 import '../models/topic.dart';
 import '../models/topic_with_stats.dart';
 
 class DatabaseService {
   static const _databaseName = 'monolog.db';
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 3;
 
   Database? _database;
 
@@ -59,24 +59,39 @@ class DatabaseService {
       )
     ''');
 
-    await _createEntryImagesTable(db);
+    await _createEntryAttachmentsTable(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      await _createEntryImagesTable(db);
+      // v1 had no attachments table. Create the final schema directly —
+      // skip the intermediate entry_images table from v2.
+      await _createEntryAttachmentsTable(db);
+    } else if (oldVersion < 3) {
+      // v2 had entry_images. Rename and add new columns.
+      await db.execute('ALTER TABLE entry_images RENAME TO entry_attachments');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN file_name TEXT');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN file_size INTEGER');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN mime_type TEXT');
     }
   }
 
-  Future<void> _createEntryImagesTable(Database db) async {
+  /// Creates the `entry_attachments` table with all columns (v3 schema).
+  Future<void> _createEntryAttachmentsTable(Database db) async {
     await db.execute('''
-      CREATE TABLE entry_images (
+      CREATE TABLE entry_attachments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         entry_id INTEGER NOT NULL,
         image_path TEXT NOT NULL,
         media_type TEXT NOT NULL DEFAULT 'image',
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
+        file_name TEXT,
+        file_size INTEGER,
+        mime_type TEXT,
         FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE
       )
     ''');
@@ -203,11 +218,12 @@ class DatabaseService {
     return rows.map((row) => Entry.fromMap(row)).toList();
   }
 
-  /// Returns entries for a topic with their attached images, newest first.
+  /// Returns entries for a topic with their attachments, newest first.
   ///
-  /// Uses two queries: one for entries, one for all images of those entries.
-  /// This avoids N+1 and is efficient for local SQLite.
-  Future<List<EntryWithImages>> getEntriesWithImages(int topicId) async {
+  /// Uses two queries: one for entries, one for all attachments of those
+  /// entries. This avoids N+1 and is efficient for local SQLite.
+  Future<List<EntryWithAttachment>> getEntriesWithAttachments(
+      int topicId) async {
     final db = await database;
 
     final entryRows = await db.query(
@@ -219,28 +235,28 @@ class DatabaseService {
 
     if (entryRows.isEmpty) return [];
 
-    // Fetch all images for this topic's entries in one query.
+    // Fetch all attachments for this topic's entries in one query.
     final entryIds = entryRows.map((r) => r['id'] as int).toList();
     final placeholders = entryIds.map((_) => '?').join(',');
-    final imageRows = await db.rawQuery(
-      'SELECT * FROM entry_images WHERE entry_id IN ($placeholders) ORDER BY sort_order ASC',
+    final attachmentRows = await db.rawQuery(
+      'SELECT * FROM entry_attachments WHERE entry_id IN ($placeholders) ORDER BY sort_order ASC',
       entryIds,
     );
 
-    // Group images by entry_id.
-    final imagesByEntry = <int, List<EntryImage>>{};
-    for (final row in imageRows) {
+    // Group attachments by entry_id.
+    final attachmentsByEntry = <int, List<EntryAttachment>>{};
+    for (final row in attachmentRows) {
       final entryId = row['entry_id'] as int;
-      imagesByEntry
+      attachmentsByEntry
           .putIfAbsent(entryId, () => [])
-          .add(EntryImage.fromMap(row));
+          .add(EntryAttachment.fromMap(row));
     }
 
     return entryRows.map((row) {
       final entry = Entry.fromMap(row);
-      return EntryWithImages(
+      return EntryWithAttachment(
         entry: entry,
-        images: imagesByEntry[entry.id] ?? [],
+        attachments: attachmentsByEntry[entry.id] ?? [],
       );
     }).toList();
   }
@@ -272,46 +288,52 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------------------------------
-  // Entry Images CRUD
+  // Entry Attachments CRUD
   // ---------------------------------------------------------------------------
 
-  Future<EntryImage> insertEntryImage({
+  Future<EntryAttachment> insertEntryAttachment({
     required int entryId,
-    required String imagePath,
+    required String filePath,
     required String mediaType,
     int sortOrder = 0,
+    String? fileName,
+    int? fileSize,
+    String? mimeType,
   }) async {
     final db = await database;
     final now = DateTime.now();
-    final image = EntryImage(
+    final attachment = EntryAttachment(
       entryId: entryId,
-      imagePath: imagePath,
+      filePath: filePath,
       mediaType: mediaType,
       sortOrder: sortOrder,
       createdAt: now,
+      fileName: fileName,
+      fileSize: fileSize,
+      mimeType: mimeType,
     );
-    final id = await db.insert('entry_images', image.toMap());
-    return image.copyWith(id: id);
+    final id = await db.insert('entry_attachments', attachment.toMap());
+    return attachment.copyWith(id: id);
   }
 
-  /// Returns all images for an entry, ordered by sort_order.
-  Future<List<EntryImage>> getEntryImages(int entryId) async {
+  /// Returns all attachments for an entry, ordered by sort_order.
+  Future<List<EntryAttachment>> getEntryAttachments(int entryId) async {
     final db = await database;
     final rows = await db.query(
-      'entry_images',
+      'entry_attachments',
       where: 'entry_id = ?',
       whereArgs: [entryId],
       orderBy: 'sort_order ASC',
     );
-    return rows.map((row) => EntryImage.fromMap(row)).toList();
+    return rows.map((row) => EntryAttachment.fromMap(row)).toList();
   }
 
-  /// Deletes all images for an entry from the database.
+  /// Deletes all attachments for an entry from the database.
   /// Note: caller is responsible for deleting the actual files from disk.
-  Future<void> deleteEntryImages(int entryId) async {
+  Future<void> deleteEntryAttachments(int entryId) async {
     final db = await database;
     await db.delete(
-      'entry_images',
+      'entry_attachments',
       where: 'entry_id = ?',
       whereArgs: [entryId],
     );

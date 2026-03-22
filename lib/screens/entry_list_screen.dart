@@ -1,12 +1,16 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 
-import '../models/entry_with_images.dart';
+import '../models/entry_with_attachment.dart';
 import '../providers/entry_list_notifier.dart';
 import '../utils/dialogs.dart';
+import '../utils/file_utils.dart';
 import '../widgets/entry_bubble.dart';
 import '../widgets/entry_input.dart';
 import 'image_viewer_screen.dart';
@@ -14,11 +18,11 @@ import 'image_viewer_screen.dart';
 /// Displays the feed of entries within a topic.
 ///
 /// Features:
-/// - Entries ordered newest-first, with optional image previews.
-/// - Multiline messenger-style input with 📎 for image attachment.
+/// - Entries ordered newest-first, with optional image previews or file cards.
+/// - Multiline messenger-style input with 📎 for attachments (gallery/camera/file).
 /// - Long press → contextual AppBar with edit / copy / share / delete.
-/// - Inline editing with image replace / remove support.
-/// - Tap on image → fullscreen viewer.
+/// - Inline editing with attachment replace / remove support.
+/// - Tap on image → fullscreen viewer. Tap on file → system app.
 class EntryListScreen extends ConsumerStatefulWidget {
   final int topicId;
   final String topicTitle;
@@ -44,11 +48,11 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   /// Non-null when the user is editing an existing entry (inline in input).
   int? _editingEntryId;
 
-  /// Path of the image currently attached to the input (new or existing).
-  String? _attachedImagePath;
+  /// Info about the currently attached file in the input (new or existing).
+  AttachmentInfo? _attachedFile;
 
-  /// Image path when editing started — used to detect changes on submit.
-  String? _originalImagePath;
+  /// Attachment info when editing started — used to detect changes on submit.
+  AttachmentInfo? _originalFile;
 
   @override
   void dispose() {
@@ -64,19 +68,19 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   void _cancelEdit() {
     setState(() {
       _editingEntryId = null;
-      _attachedImagePath = null;
-      _originalImagePath = null;
+      _attachedFile = null;
+      _originalFile = null;
     });
     _controller.clear();
     _focusNode.unfocus();
   }
 
   // ---------------------------------------------------------------------------
-  // Image picking
+  // Attachment picking
   // ---------------------------------------------------------------------------
 
-  Future<void> _pickImage() async {
-    final source = await showModalBottomSheet<ImageSource>(
+  Future<void> _pickAttachment() async {
+    final choice = await showModalBottomSheet<_AttachmentChoice>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(
@@ -85,34 +89,62 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Галерея'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              onTap: () => Navigator.pop(ctx, _AttachmentChoice.gallery),
             ),
             ListTile(
               leading: const Icon(Icons.camera_alt_outlined),
               title: const Text('Камера'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              onTap: () => Navigator.pop(ctx, _AttachmentChoice.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: const Text('Файл'),
+              onTap: () => Navigator.pop(ctx, _AttachmentChoice.file),
             ),
           ],
         ),
       ),
     );
 
-    if (source == null) return;
+    if (choice == null) return;
 
-    final picked = await _imagePicker.pickImage(
-      source: source,
-      maxWidth: 1920,
-      maxHeight: 1920,
-      imageQuality: 85,
-    );
-
-    if (picked != null) {
-      setState(() => _attachedImagePath = picked.path);
+    switch (choice) {
+      case _AttachmentChoice.gallery:
+      case _AttachmentChoice.camera:
+        final source = choice == _AttachmentChoice.gallery
+            ? ImageSource.gallery
+            : ImageSource.camera;
+        final picked = await _imagePicker.pickImage(
+          source: source,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85,
+        );
+        if (picked != null) {
+          setState(() => _attachedFile = AttachmentInfo(
+                path: picked.path,
+                isImage: true,
+                mimeType: 'image/jpeg',
+              ));
+        }
+      case _AttachmentChoice.file:
+        final result = await FilePicker.platform.pickFiles();
+        if (result != null && result.files.single.path != null) {
+          final file = result.files.single;
+          final isImage = isImageExtension(file.extension);
+          setState(() => _attachedFile = AttachmentInfo(
+                path: file.path!,
+                isImage: isImage,
+                fileName: file.name,
+                fileSize: file.size,
+                mimeType: mimeTypeFromExtension(file.extension),
+              ));
+        }
     }
   }
 
-  void _removeAttachedImage() {
-    setState(() => _attachedImagePath = null);
+  void _removeAttachment() {
+    setState(() => _attachedFile = null);
   }
 
   // ---------------------------------------------------------------------------
@@ -121,33 +153,44 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
 
   Future<void> _submitEntry() async {
     final text = _controller.text.trim();
-    if (text.isEmpty && _attachedImagePath == null) return;
+    if (text.isEmpty && _attachedFile == null) return;
 
     final notifier = ref.read(entryListProvider(widget.topicId).notifier);
 
     if (_editingEntryId != null) {
-      // Determine image changes.
-      final imageChanged = _attachedImagePath != _originalImagePath;
-      if (imageChanged) {
+      // Determine attachment changes.
+      final attachmentChanged = _attachedFile?.path != _originalFile?.path;
+      if (attachmentChanged) {
         await notifier.updateEntry(
           _editingEntryId!,
           text,
-          newImagePath: _attachedImagePath,
-          removeImage: _originalImagePath != null,
+          newFilePath: _attachedFile?.path,
+          removeAttachment: _originalFile != null,
+          mediaType: _attachedFile?.isImage == true ? 'image' : 'file',
+          fileName: _attachedFile?.fileName,
+          fileSize: _attachedFile?.fileSize,
+          mimeType: _attachedFile?.mimeType,
         );
       } else {
         await notifier.updateEntry(_editingEntryId!, text);
       }
     } else {
-      await notifier.addEntry(text, imagePath: _attachedImagePath);
+      await notifier.addEntry(
+        text,
+        filePath: _attachedFile?.path,
+        mediaType: _attachedFile?.isImage == true ? 'image' : 'file',
+        fileName: _attachedFile?.fileName,
+        fileSize: _attachedFile?.fileSize,
+        mimeType: _attachedFile?.mimeType,
+      );
     }
 
     _controller.clear();
     _focusNode.unfocus();
     setState(() {
       _editingEntryId = null;
-      _attachedImagePath = null;
-      _originalImagePath = null;
+      _attachedFile = null;
+      _originalFile = null;
     });
   }
 
@@ -157,12 +200,24 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     if (entries == null || _selectedEntryId == null) return;
 
     final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
+    final att = data.firstAttachment;
+
+    AttachmentInfo? fileInfo;
+    if (att != null) {
+      fileInfo = AttachmentInfo(
+        path: att.filePath,
+        isImage: att.isImage,
+        fileName: att.fileName,
+        fileSize: att.fileSize,
+        mimeType: att.mimeType,
+      );
+    }
 
     setState(() {
       _editingEntryId = _selectedEntryId;
       _selectedEntryId = null;
-      _attachedImagePath = data.firstImagePath;
-      _originalImagePath = data.firstImagePath;
+      _attachedFile = fileInfo;
+      _originalFile = fileInfo;
     });
 
     _controller.text = data.entry.content;
@@ -198,11 +253,11 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
     _clearSelection();
 
-    // Share image + text or just text.
-    final imagePath = data.firstImagePath;
-    if (imagePath != null) {
+    // Share file + text or just text.
+    final filePath = data.firstFilePath;
+    if (filePath != null) {
       await Share.shareXFiles(
-        [XFile(imagePath)],
+        [XFile(filePath)],
         text: data.entry.content.isNotEmpty ? data.entry.content : null,
       );
     } else {
@@ -228,8 +283,8 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     }
   }
 
-  void _openImageViewer(EntryWithImages data) {
-    final imagePath = data.firstImagePath;
+  void _openImageViewer(EntryWithAttachment data) {
+    final imagePath = data.firstFilePath;
     if (imagePath == null) return;
 
     Navigator.push(
@@ -242,6 +297,13 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openFile(EntryWithAttachment data) async {
+    final att = data.firstAttachment;
+    if (att == null) return;
+
+    await OpenFilex.open(att.filePath, type: att.mimeType);
   }
 
   // ---------------------------------------------------------------------------
@@ -334,6 +396,7 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
                               () => _selectedEntryId = data.entry.id);
                         },
                         onImageTap: () => _openImageViewer(data),
+                        onFileTap: () => _openFile(data),
                       );
                     },
                   );
@@ -350,9 +413,9 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
               onSubmit: _submitEntry,
               isEditing: _editingEntryId != null,
               onCancelEdit: _cancelEdit,
-              attachedImagePath: _attachedImagePath,
-              onPickImage: _pickImage,
-              onRemoveImage: _removeAttachedImage,
+              attachedFile: _attachedFile,
+              onPickAttachment: _pickAttachment,
+              onRemoveAttachment: _removeAttachment,
             ),
           ],
         ),
@@ -360,3 +423,5 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     );
   }
 }
+
+enum _AttachmentChoice { gallery, camera, file }

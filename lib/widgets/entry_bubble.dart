@@ -4,20 +4,22 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../models/entry_with_images.dart';
+import '../models/entry_with_attachment.dart';
 import '../utils/date_format.dart';
 import '../utils/markdown_parser.dart';
+import 'file_card.dart';
 
 /// Displays a single entry in the feed.
 ///
-/// Shows an optional image preview, parses Markdown formatting in content,
-/// recognises URLs as tappable links, and shows the creation timestamp.
-/// When [isSelected] is true the background is highlighted.
+/// Shows an optional image preview or file card, parses Markdown formatting
+/// in content, recognises URLs as tappable links, and shows the creation
+/// timestamp. When [isSelected] is true the background is highlighted.
 class EntryBubble extends StatelessWidget {
-  final EntryWithImages data;
+  final EntryWithAttachment data;
   final bool isSelected;
   final VoidCallback? onLongPress;
   final VoidCallback? onImageTap;
+  final VoidCallback? onFileTap;
 
   const EntryBubble({
     super.key,
@@ -25,13 +27,13 @@ class EntryBubble extends StatelessWidget {
     this.isSelected = false,
     this.onLongPress,
     this.onImageTap,
+    this.onFileTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final entry = data.entry;
-    final imagePath = data.firstImagePath;
     final hasContent = entry.content.isNotEmpty;
 
     return GestureDetector(
@@ -46,7 +48,7 @@ class EntryBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Image preview
-            if (imagePath != null)
+            if (data.hasImage && data.firstFilePath != null)
               Padding(
                 padding: EdgeInsets.only(bottom: hasContent ? 8 : 4),
                 child: GestureDetector(
@@ -58,7 +60,7 @@ class EntryBubble extends StatelessWidget {
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxHeight: 200),
                         child: Image.file(
-                          File(imagePath),
+                          File(data.firstFilePath!),
                           width: double.infinity,
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => Container(
@@ -76,7 +78,17 @@ class EntryBubble extends StatelessWidget {
                 ),
               ),
 
-            // Formatted text content (skip if empty — image-only entry)
+            // File card (non-image attachment)
+            if (data.hasFile && data.firstAttachment != null)
+              Padding(
+                padding: EdgeInsets.only(bottom: hasContent ? 8 : 4),
+                child: FileCard(
+                  attachment: data.firstAttachment!,
+                  onTap: onFileTap,
+                ),
+              ),
+
+            // Formatted text content (skip if empty — attachment-only entry)
             if (hasContent) ..._buildContent(context),
             if (hasContent) const SizedBox(height: 4),
 

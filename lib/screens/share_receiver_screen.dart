@@ -2,14 +2,17 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../providers/topic_list_notifier.dart';
 import '../providers/providers.dart';
+import '../utils/file_utils.dart';
+import '../widgets/file_card.dart';
 
-/// Screen for saving shared content (image or text) from another app.
+/// Screen for saving shared content (image, file, or text) from another app.
 ///
 /// Shows a preview of the shared content, an optional caption field (for
-/// images), and a list of topics. Tapping a topic saves the entry and
+/// images/files), and a list of topics. Tapping a topic saves the entry and
 /// closes the screen. A new topic can be created inline — creating it also
 /// saves the entry immediately.
 ///
@@ -18,12 +21,16 @@ import '../providers/providers.dart';
 class ShareReceiverScreen extends ConsumerStatefulWidget {
   final String? sharedImagePath;
   final String? sharedText;
+  final String? sharedFilePath;
+  final String? sharedFileMimeType;
   final VoidCallback onDone;
 
   const ShareReceiverScreen({
     super.key,
     this.sharedImagePath,
     this.sharedText,
+    this.sharedFilePath,
+    this.sharedFileMimeType,
     required this.onDone,
   });
 
@@ -40,6 +47,13 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
   bool _isSaving = false;
 
   bool get _isImage => widget.sharedImagePath != null;
+  bool get _isFile => widget.sharedFilePath != null;
+  bool get _isText => !_isImage && !_isFile;
+
+  String? get _sharedFileName =>
+      widget.sharedFilePath != null
+          ? p.basename(widget.sharedFilePath!)
+          : null;
 
   @override
   void dispose() {
@@ -59,9 +73,12 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
 
     try {
       final db = ref.read(databaseServiceProvider);
-      final content = _isImage
-          ? _captionController.text.trim()
-          : (widget.sharedText ?? '');
+      final fileService = ref.read(fileServiceProvider);
+
+      // Determine content text.
+      final content = _isText
+          ? (widget.sharedText ?? '')
+          : _captionController.text.trim();
 
       // Create entry.
       final entry = await db.insertEntry(
@@ -71,13 +88,30 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
 
       // Save image if present.
       if (_isImage) {
-        final imageService = ref.read(imageServiceProvider);
         final savedPath =
-            await imageService.saveImage(widget.sharedImagePath!);
-        await db.insertEntryImage(
+            await fileService.saveFile(widget.sharedImagePath!);
+        await db.insertEntryAttachment(
           entryId: entry.id!,
-          imagePath: savedPath,
+          filePath: savedPath,
           mediaType: 'image',
+        );
+      }
+
+      // Save file if present (non-image).
+      if (_isFile) {
+        final savedPath = await fileService.saveFile(
+          widget.sharedFilePath!,
+          fileName: _sharedFileName,
+        );
+        final fileSize =
+            await fileService.getFileSize(savedPath);
+        await db.insertEntryAttachment(
+          entryId: entry.id!,
+          filePath: savedPath,
+          mediaType: 'file',
+          fileName: _sharedFileName,
+          fileSize: fileSize > 0 ? fileSize : null,
+          mimeType: widget.sharedFileMimeType,
         );
       }
 
@@ -115,14 +149,15 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
 
     try {
       final db = ref.read(databaseServiceProvider);
+      final fileService = ref.read(fileServiceProvider);
 
       // Create the new topic.
       final topic = await db.insertTopic(title);
 
-      // Save entry to the new topic.
-      final content = _isImage
-          ? _captionController.text.trim()
-          : (widget.sharedText ?? '');
+      // Determine content text.
+      final content = _isText
+          ? (widget.sharedText ?? '')
+          : _captionController.text.trim();
 
       final entry = await db.insertEntry(
         topicId: topic.id!,
@@ -130,13 +165,29 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
       );
 
       if (_isImage) {
-        final imageService = ref.read(imageServiceProvider);
         final savedPath =
-            await imageService.saveImage(widget.sharedImagePath!);
-        await db.insertEntryImage(
+            await fileService.saveFile(widget.sharedImagePath!);
+        await db.insertEntryAttachment(
           entryId: entry.id!,
-          imagePath: savedPath,
+          filePath: savedPath,
           mediaType: 'image',
+        );
+      }
+
+      if (_isFile) {
+        final savedPath = await fileService.saveFile(
+          widget.sharedFilePath!,
+          fileName: _sharedFileName,
+        );
+        final fileSize =
+            await fileService.getFileSize(savedPath);
+        await db.insertEntryAttachment(
+          entryId: entry.id!,
+          filePath: savedPath,
+          mediaType: 'file',
+          fileName: _sharedFileName,
+          fileSize: fileSize > 0 ? fileSize : null,
+          mimeType: widget.sharedFileMimeType,
         );
       }
 
@@ -293,23 +344,21 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _captionController,
-              textCapitalization: TextCapitalization.sentences,
-              maxLines: 3,
-              minLines: 1,
-              decoration: const InputDecoration(
-                hintText: 'Подпись (необязательно)…',
-                border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                isDense: true,
-              ),
+            _buildCaptionField(),
+          ],
+
+          // File preview (non-image)
+          if (_isFile) ...[
+            FileCard(
+              fileName: _sharedFileName,
+              mimeType: widget.sharedFileMimeType,
             ),
+            const SizedBox(height: 12),
+            _buildCaptionField(),
           ],
 
           // Text preview
-          if (!_isImage && widget.sharedText != null)
+          if (_isText && widget.sharedText != null)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -326,6 +375,22 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCaptionField() {
+    return TextField(
+      controller: _captionController,
+      textCapitalization: TextCapitalization.sentences,
+      maxLines: 3,
+      minLines: 1,
+      decoration: const InputDecoration(
+        hintText: 'Подпись (необязательно)…',
+        border: OutlineInputBorder(),
+        contentPadding:
+            EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
       ),
     );
   }

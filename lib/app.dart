@@ -63,20 +63,37 @@ class _MonologAppState extends State<MonologApp> {
   void _handleSharedMedia(SharedMediaFile file) {
     String? imagePath;
     String? sharedText;
+    String? filePath;
+    String? fileMimeType;
 
     if (file.type == SharedMediaType.text || file.type == SharedMediaType.url) {
       sharedText = file.path;
     } else if (file.type == SharedMediaType.image) {
       imagePath = file.path;
+    } else if (file.type == SharedMediaType.file ||
+        file.type == SharedMediaType.video) {
+      // Treat video and generic files the same way (no video player in MVP).
+      filePath = file.path;
+      fileMimeType = file.mimeType;
     } else {
       // Unsupported type — ignore.
       return;
     }
 
-    _navigateToShareReceiver(imagePath: imagePath, sharedText: sharedText);
+    _navigateToShareReceiver(
+      imagePath: imagePath,
+      sharedText: sharedText,
+      filePath: filePath,
+      fileMimeType: fileMimeType,
+    );
   }
 
-  void _navigateToShareReceiver({String? imagePath, String? sharedText}) {
+  void _navigateToShareReceiver({
+    String? imagePath,
+    String? sharedText,
+    String? filePath,
+    String? fileMimeType,
+  }) {
     // Wait for the navigator to be ready (relevant for cold start).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _navigatorKey.currentState?.push(
@@ -84,6 +101,8 @@ class _MonologAppState extends State<MonologApp> {
           builder: (_) => ShareReceiverScreen(
             sharedImagePath: imagePath,
             sharedText: sharedText,
+            sharedFilePath: filePath,
+            sharedFileMimeType: fileMimeType,
             onDone: _onShareDone,
           ),
         ),

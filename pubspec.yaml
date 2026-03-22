@@ -18,6 +18,8 @@ dependencies:
   share_plus: ^7.0.0
   image_picker: ^1.1.0
   receive_sharing_intent: ^1.8.1
+  file_picker: ^8.1.0
+  open_filex: ^4.5.0
 
 dev_dependencies:
   flutter_test:

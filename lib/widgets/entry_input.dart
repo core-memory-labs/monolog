@@ -2,22 +2,28 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../utils/file_utils.dart';
+import 'file_card.dart';
+
 /// Messenger-style input field at the bottom of the entry feed.
 ///
 /// In normal mode shows a text field with a 📎 button on the left and an
 /// "arrow up" send button on the right.
 /// In edit mode shows a "Редактирование" banner with cancel (×) and
 /// the send button changes to a checkmark.
-/// When an image is attached, shows a thumbnail preview above the text field.
+/// When an attachment is present, shows either an image thumbnail or a file
+/// card above the text field.
 class EntryInput extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final VoidCallback onSubmit;
   final bool isEditing;
   final VoidCallback? onCancelEdit;
-  final String? attachedImagePath;
-  final VoidCallback? onPickImage;
-  final VoidCallback? onRemoveImage;
+
+  /// Currently attached file info (image or other file).
+  final AttachmentInfo? attachedFile;
+  final VoidCallback? onPickAttachment;
+  final VoidCallback? onRemoveAttachment;
 
   const EntryInput({
     super.key,
@@ -26,9 +32,9 @@ class EntryInput extends StatelessWidget {
     required this.onSubmit,
     this.isEditing = false,
     this.onCancelEdit,
-    this.attachedImagePath,
-    this.onPickImage,
-    this.onRemoveImage,
+    this.attachedFile,
+    this.onPickAttachment,
+    this.onRemoveAttachment,
   });
 
   @override
@@ -73,53 +79,8 @@ class EntryInput extends StatelessWidget {
               ),
             ),
 
-          // Image preview (when attached)
-          if (attachedImagePath != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 120),
-                      child: Image.file(
-                        File(attachedImagePath!),
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          height: 80,
-                          color: theme.colorScheme.surfaceContainerHighest,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_outlined),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: GestureDetector(
-                      onTap: onRemoveImage,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.close,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          // Attachment preview (image thumbnail or file card)
+          if (attachedFile != null) _buildAttachmentPreview(theme),
 
           // Text field + buttons
           Padding(
@@ -129,9 +90,9 @@ class EntryInput extends StatelessWidget {
               children: [
                 // Attach button
                 IconButton(
-                  onPressed: onPickImage,
+                  onPressed: onPickAttachment,
                   icon: const Icon(Icons.attach_file),
-                  tooltip: 'Прикрепить изображение',
+                  tooltip: 'Прикрепить',
                 ),
                 Expanded(
                   child: TextField(
@@ -161,5 +122,69 @@ class EntryInput extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildAttachmentPreview(ThemeData theme) {
+    final file = attachedFile!;
+
+    if (file.isImage) {
+      // Image thumbnail preview
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 120),
+                child: Image.file(
+                  File(file.path),
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 80,
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    child: const Center(
+                      child: Icon(Icons.broken_image_outlined),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: GestureDetector(
+                onTap: onRemoveAttachment,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.close,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // File card preview
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: FileCard(
+          fileName: file.fileName,
+          fileSize: file.fileSize,
+          mimeType: file.mimeType,
+          onRemove: onRemoveAttachment,
+        ),
+      );
+    }
   }
 }
