@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../models/entry_with_images.dart';
 import '../providers/entry_list_notifier.dart';
 import '../utils/dialogs.dart';
 import '../widgets/entry_bubble.dart';
 import '../widgets/entry_input.dart';
+import 'image_viewer_screen.dart';
 
 /// Displays the feed of entries within a topic.
 ///
 /// Features:
-/// - Entries ordered newest-first.
-/// - Multiline messenger-style input at the bottom.
+/// - Entries ordered newest-first, with optional image previews.
+/// - Multiline messenger-style input with 📎 for image attachment.
 /// - Long press → contextual AppBar with edit / copy / share / delete.
-/// - Inline editing: text loads into the input field.
+/// - Inline editing with image replace / remove support.
+/// - Tap on image → fullscreen viewer.
 class EntryListScreen extends ConsumerStatefulWidget {
   final int topicId;
   final String topicTitle;
@@ -32,12 +36,19 @@ class EntryListScreen extends ConsumerStatefulWidget {
 class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+  final _imagePicker = ImagePicker();
 
   /// Non-null when an entry is selected via long press (contextual AppBar).
   int? _selectedEntryId;
 
   /// Non-null when the user is editing an existing entry (inline in input).
   int? _editingEntryId;
+
+  /// Path of the image currently attached to the input (new or existing).
+  String? _attachedImagePath;
+
+  /// Image path when editing started — used to detect changes on submit.
+  String? _originalImagePath;
 
   @override
   void dispose() {
@@ -51,9 +62,57 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   }
 
   void _cancelEdit() {
-    setState(() => _editingEntryId = null);
+    setState(() {
+      _editingEntryId = null;
+      _attachedImagePath = null;
+      _originalImagePath = null;
+    });
     _controller.clear();
     _focusNode.unfocus();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Image picking
+  // ---------------------------------------------------------------------------
+
+  Future<void> _pickImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Галерея'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Камера'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    final picked = await _imagePicker.pickImage(
+      source: source,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+
+    if (picked != null) {
+      setState(() => _attachedImagePath = picked.path);
+    }
+  }
+
+  void _removeAttachedImage() {
+    setState(() => _attachedImagePath = null);
   }
 
   // ---------------------------------------------------------------------------
@@ -62,19 +121,34 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
 
   Future<void> _submitEntry() async {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _attachedImagePath == null) return;
 
     final notifier = ref.read(entryListProvider(widget.topicId).notifier);
 
     if (_editingEntryId != null) {
-      await notifier.updateEntry(_editingEntryId!, text);
-      setState(() => _editingEntryId = null);
+      // Determine image changes.
+      final imageChanged = _attachedImagePath != _originalImagePath;
+      if (imageChanged) {
+        await notifier.updateEntry(
+          _editingEntryId!,
+          text,
+          newImagePath: _attachedImagePath,
+          removeImage: _originalImagePath != null,
+        );
+      } else {
+        await notifier.updateEntry(_editingEntryId!, text);
+      }
     } else {
-      await notifier.addEntry(text);
+      await notifier.addEntry(text, imagePath: _attachedImagePath);
     }
 
     _controller.clear();
     _focusNode.unfocus();
+    setState(() {
+      _editingEntryId = null;
+      _attachedImagePath = null;
+      _originalImagePath = null;
+    });
   }
 
   void _startEdit() {
@@ -82,16 +156,18 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
     if (entries == null || _selectedEntryId == null) return;
 
-    final entry = entries.firstWhere((e) => e.id == _selectedEntryId);
+    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
 
     setState(() {
       _editingEntryId = _selectedEntryId;
       _selectedEntryId = null;
+      _attachedImagePath = data.firstImagePath;
+      _originalImagePath = data.firstImagePath;
     });
 
-    _controller.text = entry.content;
+    _controller.text = data.entry.content;
     _controller.selection =
-        TextSelection.collapsed(offset: entry.content.length);
+        TextSelection.collapsed(offset: data.entry.content.length);
     _focusNode.requestFocus();
   }
 
@@ -100,8 +176,8 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
     if (entries == null || _selectedEntryId == null) return;
 
-    final entry = entries.firstWhere((e) => e.id == _selectedEntryId);
-    await Clipboard.setData(ClipboardData(text: entry.content));
+    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
+    await Clipboard.setData(ClipboardData(text: data.entry.content));
     _clearSelection();
 
     if (mounted) {
@@ -119,9 +195,19 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
     if (entries == null || _selectedEntryId == null) return;
 
-    final entry = entries.firstWhere((e) => e.id == _selectedEntryId);
+    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
     _clearSelection();
-    await Share.share(entry.content);
+
+    // Share image + text or just text.
+    final imagePath = data.firstImagePath;
+    if (imagePath != null) {
+      await Share.shareXFiles(
+        [XFile(imagePath)],
+        text: data.entry.content.isNotEmpty ? data.entry.content : null,
+      );
+    } else {
+      await Share.share(data.entry.content);
+    }
   }
 
   Future<void> _deleteEntry() async {
@@ -140,6 +226,22 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
           .read(entryListProvider(widget.topicId).notifier)
           .deleteEntry(entryId);
     }
+  }
+
+  void _openImageViewer(EntryWithImages data) {
+    final imagePath = data.firstImagePath;
+    if (imagePath == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ImageViewerScreen(
+          imagePath: imagePath,
+          entryId: data.entry.id!,
+          topicId: widget.topicId,
+        ),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -189,7 +291,6 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
       canPop: _selectedEntryId == null && _editingEntryId == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        // Editing takes priority — cancel edit first.
         if (_editingEntryId != null) {
           _cancelEdit();
         } else {
@@ -223,16 +324,16 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
                     separatorBuilder: (_, __) =>
                         const Divider(height: 1),
                     itemBuilder: (context, index) {
-                      final entry = entries[index];
+                      final data = entries[index];
                       return EntryBubble(
-                        entry: entry,
-                        isSelected: entry.id == _selectedEntryId,
+                        data: data,
+                        isSelected: data.entry.id == _selectedEntryId,
                         onLongPress: () {
-                          // Cancel editing if active.
                           if (_editingEntryId != null) _cancelEdit();
                           setState(
-                              () => _selectedEntryId = entry.id);
+                              () => _selectedEntryId = data.entry.id);
                         },
+                        onImageTap: () => _openImageViewer(data),
                       );
                     },
                   );
@@ -249,6 +350,9 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
               onSubmit: _submitEntry,
               isEditing: _editingEntryId != null,
               onCancelEdit: _cancelEdit,
+              attachedImagePath: _attachedImagePath,
+              onPickImage: _pickImage,
+              onRemoveImage: _removeAttachedImage,
             ),
           ],
         ),

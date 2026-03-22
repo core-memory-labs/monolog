@@ -1,25 +1,29 @@
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../models/entry.dart';
+import '../models/entry_with_images.dart';
 import '../utils/date_format.dart';
 
 /// Displays a single entry in the feed.
 ///
-/// Recognises URLs in [entry.content] and renders them as tappable links.
-/// Shows the creation timestamp below the text.
+/// Shows an optional image preview, recognises URLs in content, and renders
+/// them as tappable links. Shows the creation timestamp below.
 /// When [isSelected] is true the background is highlighted.
 class EntryBubble extends StatelessWidget {
-  final Entry entry;
+  final EntryWithImages data;
   final bool isSelected;
   final VoidCallback? onLongPress;
+  final VoidCallback? onImageTap;
 
   const EntryBubble({
     super.key,
-    required this.entry,
+    required this.data,
     this.isSelected = false,
     this.onLongPress,
+    this.onImageTap,
   });
 
   /// Matches http / https URLs, stopping before trailing punctuation that is
@@ -32,6 +36,9 @@ class EntryBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final entry = data.entry;
+    final imagePath = data.firstImagePath;
+    final hasContent = entry.content.isNotEmpty;
 
     return GestureDetector(
       onLongPress: onLongPress,
@@ -44,13 +51,47 @@ class EntryBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            RichText(
-              text: TextSpan(
-                style: theme.textTheme.bodyLarge,
-                children: _buildSpans(context),
+            // Image preview
+            if (imagePath != null)
+              Padding(
+                padding: EdgeInsets.only(bottom: hasContent ? 8 : 4),
+                child: GestureDetector(
+                  onTap: onImageTap,
+                  child: Hero(
+                    tag: 'entry_image_${entry.id}',
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: Image.file(
+                          File(imagePath),
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            height: 100,
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            child: const Center(
+                              child: Icon(Icons.broken_image_outlined, size: 32),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
+
+            // Text content (skip if empty — image-only entry)
+            if (hasContent)
+              RichText(
+                text: TextSpan(
+                  style: theme.textTheme.bodyLarge,
+                  children: _buildSpans(context),
+                ),
+              ),
+            if (hasContent) const SizedBox(height: 4),
+
+            // Timestamp
             Text(
               formatEntryDate(entry.createdAt),
               style: theme.textTheme.bodySmall?.copyWith(
@@ -65,13 +106,12 @@ class EntryBubble extends StatelessWidget {
 
   List<TextSpan> _buildSpans(BuildContext context) {
     final theme = Theme.of(context);
-    final text = entry.content;
+    final text = data.entry.content;
     final spans = <TextSpan>[];
     final matches = _urlRegex.allMatches(text);
     int lastEnd = 0;
 
     for (final match in matches) {
-      // Plain text before this URL.
       if (match.start > lastEnd) {
         spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
       }
@@ -95,12 +135,10 @@ class EntryBubble extends StatelessWidget {
       lastEnd = match.end;
     }
 
-    // Remaining plain text.
     if (lastEnd < text.length) {
       spans.add(TextSpan(text: text.substring(lastEnd)));
     }
 
-    // Safety: ensure at least one span.
     if (spans.isEmpty) {
       spans.add(TextSpan(text: text));
     }

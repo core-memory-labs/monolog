@@ -3,12 +3,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/entry.dart';
+import '../models/entry_image.dart';
+import '../models/entry_with_images.dart';
 import '../models/topic.dart';
 import '../models/topic_with_stats.dart';
 
 class DatabaseService {
   static const _databaseName = 'monolog.db';
-  static const _databaseVersion = 1;
+  static const _databaseVersion = 2;
 
   Database? _database;
 
@@ -26,6 +28,7 @@ class DatabaseService {
       path,
       version: _databaseVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
       onConfigure: _onConfigure,
     );
   }
@@ -56,8 +59,27 @@ class DatabaseService {
       )
     ''');
 
-    // FTS5 for full-text search will be added in Stage 4
-    // together with sqlite3_flutter_libs (Android's built-in SQLite lacks FTS5).
+    await _createEntryImagesTable(db);
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createEntryImagesTable(db);
+    }
+  }
+
+  Future<void> _createEntryImagesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE entry_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id INTEGER NOT NULL,
+        image_path TEXT NOT NULL,
+        media_type TEXT NOT NULL DEFAULT 'image',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   // ---------------------------------------------------------------------------
@@ -181,6 +203,48 @@ class DatabaseService {
     return rows.map((row) => Entry.fromMap(row)).toList();
   }
 
+  /// Returns entries for a topic with their attached images, newest first.
+  ///
+  /// Uses two queries: one for entries, one for all images of those entries.
+  /// This avoids N+1 and is efficient for local SQLite.
+  Future<List<EntryWithImages>> getEntriesWithImages(int topicId) async {
+    final db = await database;
+
+    final entryRows = await db.query(
+      'entries',
+      where: 'topic_id = ?',
+      whereArgs: [topicId],
+      orderBy: 'created_at DESC',
+    );
+
+    if (entryRows.isEmpty) return [];
+
+    // Fetch all images for this topic's entries in one query.
+    final entryIds = entryRows.map((r) => r['id'] as int).toList();
+    final placeholders = entryIds.map((_) => '?').join(',');
+    final imageRows = await db.rawQuery(
+      'SELECT * FROM entry_images WHERE entry_id IN ($placeholders) ORDER BY sort_order ASC',
+      entryIds,
+    );
+
+    // Group images by entry_id.
+    final imagesByEntry = <int, List<EntryImage>>{};
+    for (final row in imageRows) {
+      final entryId = row['entry_id'] as int;
+      imagesByEntry
+          .putIfAbsent(entryId, () => [])
+          .add(EntryImage.fromMap(row));
+    }
+
+    return entryRows.map((row) {
+      final entry = Entry.fromMap(row);
+      return EntryWithImages(
+        entry: entry,
+        images: imagesByEntry[entry.id] ?? [],
+      );
+    }).toList();
+  }
+
   Future<void> updateEntry(Entry entry) async {
     final db = await database;
     final updated = entry.copyWith(updatedAt: DateTime.now());
@@ -205,6 +269,52 @@ class DatabaseService {
       [topicId],
     );
     return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entry Images CRUD
+  // ---------------------------------------------------------------------------
+
+  Future<EntryImage> insertEntryImage({
+    required int entryId,
+    required String imagePath,
+    required String mediaType,
+    int sortOrder = 0,
+  }) async {
+    final db = await database;
+    final now = DateTime.now();
+    final image = EntryImage(
+      entryId: entryId,
+      imagePath: imagePath,
+      mediaType: mediaType,
+      sortOrder: sortOrder,
+      createdAt: now,
+    );
+    final id = await db.insert('entry_images', image.toMap());
+    return image.copyWith(id: id);
+  }
+
+  /// Returns all images for an entry, ordered by sort_order.
+  Future<List<EntryImage>> getEntryImages(int entryId) async {
+    final db = await database;
+    final rows = await db.query(
+      'entry_images',
+      where: 'entry_id = ?',
+      whereArgs: [entryId],
+      orderBy: 'sort_order ASC',
+    );
+    return rows.map((row) => EntryImage.fromMap(row)).toList();
+  }
+
+  /// Deletes all images for an entry from the database.
+  /// Note: caller is responsible for deleting the actual files from disk.
+  Future<void> deleteEntryImages(int entryId) async {
+    final db = await database;
+    await db.delete(
+      'entry_images',
+      where: 'entry_id = ?',
+      whereArgs: [entryId],
+    );
   }
 
   // ---------------------------------------------------------------------------
