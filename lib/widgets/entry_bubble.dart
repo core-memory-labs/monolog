@@ -8,12 +8,14 @@ import '../models/entry_with_attachment.dart';
 import '../utils/date_format.dart';
 import '../utils/markdown_parser.dart';
 import 'file_card.dart';
+import 'link_preview_card.dart';
 
 /// Displays a single entry in the feed.
 ///
 /// Shows an optional image preview or file card, parses Markdown formatting
-/// in content, recognises URLs as tappable links, and shows the creation
-/// timestamp. When [isSelected] is true the background is highlighted.
+/// in content, recognises URLs as tappable links, shows a link preview card
+/// for the first URL, and shows the creation timestamp. When [isSelected]
+/// is true the background is highlighted.
 class EntryBubble extends StatelessWidget {
   final EntryWithAttachment data;
   final bool isSelected;
@@ -35,6 +37,9 @@ class EntryBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final entry = data.entry;
     final hasContent = entry.content.isNotEmpty;
+
+    // Extract the first URL for link preview.
+    final firstUrl = hasContent ? extractFirstUrl(entry.content) : null;
 
     return GestureDetector(
       onLongPress: onLongPress,
@@ -90,6 +95,14 @@ class EntryBubble extends StatelessWidget {
 
             // Formatted text content (skip if empty — attachment-only entry)
             if (hasContent) ..._buildContent(context),
+
+            // Link preview card (for the first URL in content)
+            if (firstUrl != null)
+              Padding(
+                padding: EdgeInsets.only(top: hasContent ? 6 : 0, bottom: 4),
+                child: LinkPreviewCard(url: firstUrl),
+              ),
+
             if (hasContent) const SizedBox(height: 4),
 
             // Timestamp
@@ -224,10 +237,12 @@ class EntryBubble extends StatelessWidget {
               decoration: TextDecoration.underline,
             ),
             recognizer: TapGestureRecognizer()
-              ..onTap = () => launchUrl(
-                    Uri.parse(span.text),
-                    mode: LaunchMode.externalApplication,
-                  ),
+              ..onTap = () {
+                final uri = Uri.tryParse(span.text);
+                if (uri != null) {
+                  launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
           ),
       };
     }).toList();

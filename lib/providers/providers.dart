@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/database_service.dart';
 import '../services/file_service.dart';
+import '../services/link_preview_service.dart';
 
 /// Single instance of [DatabaseService] shared across the app.
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
@@ -16,4 +17,14 @@ final databaseServiceProvider = Provider<DatabaseService>((ref) {
 /// on disk. Renamed from `imageServiceProvider` in Stage 3.4.
 final fileServiceProvider = Provider<FileService>((ref) {
   return FileService();
+});
+
+/// Single instance of [LinkPreviewService] shared across the app.
+///
+/// Fetches, parses, and caches OpenGraph link previews. Uses
+/// [DatabaseService] for persistent cache and downloads OG images to disk.
+final linkPreviewServiceProvider = Provider<LinkPreviewService>((ref) {
+  return LinkPreviewService(
+    db: ref.read(databaseServiceProvider),
+  );
 });

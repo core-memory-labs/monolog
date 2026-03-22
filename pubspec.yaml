@@ -20,6 +20,8 @@ dependencies:
   receive_sharing_intent: ^1.8.1
   file_picker: ^8.1.0
   open_filex: ^4.5.0
+  http: ^1.2.0
+  html: ^0.15.5
 
 dev_dependencies:
   flutter_test:

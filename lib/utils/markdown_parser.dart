@@ -126,6 +126,16 @@ List<MarkdownBlock> parseMarkdown(String input) {
   return blocks;
 }
 
+/// Extracts the first http/https URL found in [text], or `null` if none.
+///
+/// Used by [LinkPreviewCard] to determine which URL to preview.
+/// Reuses the same regex as inline URL detection.
+String? extractFirstUrl(String text) {
+  if (text.isEmpty) return null;
+  final match = _urlRegex.firstMatch(text);
+  return match?.group(0);
+}
+
 // ---------------------------------------------------------------------------
 // Block-level parsing (quotes vs. paragraphs)
 // ---------------------------------------------------------------------------

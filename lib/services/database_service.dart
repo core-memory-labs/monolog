@@ -5,12 +5,13 @@ import 'package:sqflite/sqflite.dart';
 import '../models/entry.dart';
 import '../models/entry_attachment.dart';
 import '../models/entry_with_attachment.dart';
+import '../models/link_preview.dart';
 import '../models/topic.dart';
 import '../models/topic_with_stats.dart';
 
 class DatabaseService {
   static const _databaseName = 'monolog.db';
-  static const _databaseVersion = 3;
+  static const _databaseVersion = 4;
 
   Database? _database;
 
@@ -60,6 +61,7 @@ class DatabaseService {
     ''');
 
     await _createEntryAttachmentsTable(db);
+    await _createLinkPreviewsTable(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -77,6 +79,10 @@ class DatabaseService {
       await db.execute(
           'ALTER TABLE entry_attachments ADD COLUMN mime_type TEXT');
     }
+
+    if (oldVersion < 4) {
+      await _createLinkPreviewsTable(db);
+    }
   }
 
   /// Creates the `entry_attachments` table with all columns (v3 schema).
@@ -93,6 +99,22 @@ class DatabaseService {
         file_size INTEGER,
         mime_type TEXT,
         FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  /// Creates the `link_previews` table (v4 schema).
+  Future<void> _createLinkPreviewsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE link_previews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT NOT NULL UNIQUE,
+        title TEXT,
+        description TEXT,
+        image_url TEXT,
+        image_path TEXT,
+        site_name TEXT,
+        fetched_at TEXT NOT NULL
       )
     ''');
   }
@@ -336,6 +358,63 @@ class DatabaseService {
       'entry_attachments',
       where: 'entry_id = ?',
       whereArgs: [entryId],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Link Previews CRUD
+  // ---------------------------------------------------------------------------
+
+  /// Returns the cached link preview for [url], or `null` if not cached.
+  Future<LinkPreview?> getLinkPreview(String url) async {
+    final db = await database;
+    final rows = await db.query(
+      'link_previews',
+      where: 'url = ?',
+      whereArgs: [url],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return LinkPreview.fromMap(rows.first);
+  }
+
+  /// Inserts or replaces a link preview cache entry.
+  ///
+  /// Uses `INSERT OR REPLACE` to handle the UNIQUE constraint on `url`.
+  Future<LinkPreview> insertLinkPreview({
+    required String url,
+    String? title,
+    String? description,
+    String? imageUrl,
+    String? imagePath,
+    String? siteName,
+  }) async {
+    final db = await database;
+    final now = DateTime.now();
+    final preview = LinkPreview(
+      url: url,
+      title: title,
+      description: description,
+      imageUrl: imageUrl,
+      imagePath: imagePath,
+      siteName: siteName,
+      fetchedAt: now,
+    );
+    final id = await db.insert(
+      'link_previews',
+      preview.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return preview.copyWith(id: id);
+  }
+
+  /// Deletes the cached link preview for [url].
+  Future<void> deleteLinkPreview(String url) async {
+    final db = await database;
+    await db.delete(
+      'link_previews',
+      where: 'url = ?',
+      whereArgs: [url],
     );
   }
 
