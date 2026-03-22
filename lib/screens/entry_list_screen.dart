@@ -23,14 +23,21 @@ import 'image_viewer_screen.dart';
 /// - Long press → contextual AppBar with edit / copy / share / delete.
 /// - Inline editing with attachment replace / remove support.
 /// - Tap on image → fullscreen viewer. Tap on file → system app.
+/// - [scrollToEntryId]: when set, scrolls to and highlights the target entry
+///   (used for navigation from search results).
 class EntryListScreen extends ConsumerStatefulWidget {
   final int topicId;
   final String topicTitle;
+
+  /// If non-null, the screen will scroll to this entry and briefly highlight
+  /// it. Used when navigating from search results.
+  final int? scrollToEntryId;
 
   const EntryListScreen({
     super.key,
     required this.topicId,
     required this.topicTitle,
+    this.scrollToEntryId,
   });
 
   @override
@@ -54,6 +61,17 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   /// Attachment info when editing started — used to detect changes on submit.
   AttachmentInfo? _originalFile;
 
+  // --- Scroll-to-entry support ---
+
+  /// Key placed on the target entry widget for [Scrollable.ensureVisible].
+  final _scrollTargetKey = GlobalKey();
+
+  /// Prevents repeated scrolling on rebuilds.
+  bool _hasScrolledToTarget = false;
+
+  /// Entry ID currently highlighted (briefly, after scrolling from search).
+  int? _highlightedEntryId;
+
   @override
   void dispose() {
     _controller.dispose();
@@ -73,6 +91,35 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     });
     _controller.clear();
     _focusNode.unfocus();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scroll to entry (from search)
+  // ---------------------------------------------------------------------------
+
+  /// Called after each build when entries are loaded and a scroll target exists.
+  void _scrollToTargetIfNeeded() {
+    if (widget.scrollToEntryId == null || _hasScrolledToTarget) return;
+
+    _hasScrolledToTarget = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollTargetKey.currentContext != null) {
+        Scrollable.ensureVisible(
+          _scrollTargetKey.currentContext!,
+          duration: const Duration(milliseconds: 300),
+          alignment: 0.3, // Position 30% from the top of the viewport.
+        );
+
+        // Briefly highlight the entry.
+        setState(() => _highlightedEntryId = widget.scrollToEntryId);
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) {
+            setState(() => _highlightedEntryId = null);
+          }
+        });
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -380,6 +427,9 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
                     );
                   }
 
+                  // Schedule scroll to target after this build.
+                  _scrollToTargetIfNeeded();
+
                   return ListView.separated(
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     itemCount: entries.length,
@@ -387,9 +437,16 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
                         const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final data = entries[index];
+                      final isScrollTarget =
+                          data.entry.id == widget.scrollToEntryId &&
+                              !_hasScrolledToTarget;
+
                       return EntryBubble(
+                        key: isScrollTarget ? _scrollTargetKey : null,
                         data: data,
                         isSelected: data.entry.id == _selectedEntryId,
+                        isHighlighted:
+                            data.entry.id == _highlightedEntryId,
                         onLongPress: () {
                           if (_editingEntryId != null) _cancelEdit();
                           setState(

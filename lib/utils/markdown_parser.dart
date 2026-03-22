@@ -136,6 +136,20 @@ String? extractFirstUrl(String text) {
   return match?.group(0);
 }
 
+/// Strips Markdown formatting markers from [content], returning plain text.
+///
+/// Used for search result snippets where formatting markers would be
+/// distracting. Removes code blocks, inline markers (`*`, `_`, `~`, `` ` ``),
+/// and quote prefixes (`> `).
+String stripMarkdown(String content) {
+  return content
+      .replaceAll(_codeBlockRegex, ' ') // remove code blocks
+      .replaceAll(RegExp(r'[*_~`]'), '') // remove inline markers
+      .replaceAll(RegExp(r'^> ', multiLine: true), '') // remove quote prefix
+      .replaceAll(RegExp(r'\s+'), ' ') // normalise whitespace
+      .trim();
+}
+
 // ---------------------------------------------------------------------------
 // Block-level parsing (quotes vs. paragraphs)
 // ---------------------------------------------------------------------------

@@ -14,11 +14,14 @@ import 'link_preview_card.dart';
 ///
 /// Shows an optional image preview or file card, parses Markdown formatting
 /// in content, recognises URLs as tappable links, shows a link preview card
-/// for the first URL, and shows the creation timestamp. When [isSelected]
-/// is true the background is highlighted.
+/// for the first URL, and shows the creation timestamp.
+///
+/// [isSelected] highlights the entry for the contextual AppBar selection.
+/// [isHighlighted] briefly highlights the entry when scrolled to from search.
 class EntryBubble extends StatelessWidget {
   final EntryWithAttachment data;
   final bool isSelected;
+  final bool isHighlighted;
   final VoidCallback? onLongPress;
   final VoidCallback? onImageTap;
   final VoidCallback? onFileTap;
@@ -27,6 +30,7 @@ class EntryBubble extends StatelessWidget {
     super.key,
     required this.data,
     this.isSelected = false,
+    this.isHighlighted = false,
     this.onLongPress,
     this.onImageTap,
     this.onFileTap,
@@ -41,14 +45,23 @@ class EntryBubble extends StatelessWidget {
     // Extract the first URL for link preview.
     final firstUrl = hasContent ? extractFirstUrl(entry.content) : null;
 
+    // Determine background colour: selection takes priority over highlight.
+    Color bgColor;
+    if (isSelected) {
+      bgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.3);
+    } else if (isHighlighted) {
+      bgColor = theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3);
+    } else {
+      bgColor = Colors.transparent;
+    }
+
     return GestureDetector(
       onLongPress: onLongPress,
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 600),
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        color: isSelected
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
-            : Colors.transparent,
+        color: bgColor,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

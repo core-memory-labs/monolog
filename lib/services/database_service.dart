@@ -6,12 +6,13 @@ import '../models/entry.dart';
 import '../models/entry_attachment.dart';
 import '../models/entry_with_attachment.dart';
 import '../models/link_preview.dart';
+import '../models/search_result.dart';
 import '../models/topic.dart';
 import '../models/topic_with_stats.dart';
 
 class DatabaseService {
   static const _databaseName = 'monolog.db';
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 5;
 
   Database? _database;
 
@@ -62,6 +63,7 @@ class DatabaseService {
 
     await _createEntryAttachmentsTable(db);
     await _createLinkPreviewsTable(db);
+    await _createFts5Table(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -82,6 +84,12 @@ class DatabaseService {
 
     if (oldVersion < 4) {
       await _createLinkPreviewsTable(db);
+    }
+
+    if (oldVersion < 5) {
+      await _createFts5Table(db);
+      // Populate FTS5 index from existing entries.
+      await _populateFts5Index(db);
     }
   }
 
@@ -116,6 +124,47 @@ class DatabaseService {
         site_name TEXT,
         fetched_at TEXT NOT NULL
       )
+    ''');
+  }
+
+  /// Creates the FTS5 virtual table and synchronisation triggers (v5 schema).
+  ///
+  /// Uses external content mode (`content=entries`) — FTS5 reads text from
+  /// the `entries` table and does not duplicate storage. Triggers keep the
+  /// index in sync with INSERT / UPDATE / DELETE on `entries`.
+  Future<void> _createFts5Table(Database db) async {
+    await db.execute('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts 
+      USING fts5(content, content=entries, content_rowid=id)
+    ''');
+
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+        INSERT INTO entries_fts(rowid, content) VALUES (new.id, new.content);
+      END
+    ''');
+
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+        INSERT INTO entries_fts(entries_fts, rowid, content) VALUES('delete', old.id, old.content);
+      END
+    ''');
+
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE ON entries BEGIN
+        INSERT INTO entries_fts(entries_fts, rowid, content) VALUES('delete', old.id, old.content);
+        INSERT INTO entries_fts(rowid, content) VALUES (new.id, new.content);
+      END
+    ''');
+  }
+
+  /// Populates the FTS5 index from all existing entries.
+  ///
+  /// Called during migration (v4 → v5) for existing users who already have
+  /// entries in the database.
+  Future<void> _populateFts5Index(Database db) async {
+    await db.execute('''
+      INSERT INTO entries_fts(rowid, content) SELECT id, content FROM entries
     ''');
   }
 
@@ -257,28 +306,29 @@ class DatabaseService {
 
     if (entryRows.isEmpty) return [];
 
-    // Fetch all attachments for this topic's entries in one query.
-    final entryIds = entryRows.map((r) => r['id'] as int).toList();
-    final placeholders = entryIds.map((_) => '?').join(',');
+    final entries = entryRows.map((row) => Entry.fromMap(row)).toList();
+    final entryIds = entries.map((e) => e.id!).toList();
+
+    // Fetch all attachments for these entries in one query.
+    final placeholders = List.filled(entryIds.length, '?').join(', ');
     final attachmentRows = await db.rawQuery(
       'SELECT * FROM entry_attachments WHERE entry_id IN ($placeholders) ORDER BY sort_order ASC',
       entryIds,
     );
 
-    // Group attachments by entry_id.
-    final attachmentsByEntry = <int, List<EntryAttachment>>{};
-    for (final row in attachmentRows) {
-      final entryId = row['entry_id'] as int;
-      attachmentsByEntry
-          .putIfAbsent(entryId, () => [])
-          .add(EntryAttachment.fromMap(row));
+    final attachments =
+        attachmentRows.map((row) => EntryAttachment.fromMap(row)).toList();
+
+    // Group attachments by entry ID.
+    final attachmentMap = <int, List<EntryAttachment>>{};
+    for (final att in attachments) {
+      attachmentMap.putIfAbsent(att.entryId, () => []).add(att);
     }
 
-    return entryRows.map((row) {
-      final entry = Entry.fromMap(row);
+    return entries.map((entry) {
       return EntryWithAttachment(
         entry: entry,
-        attachments: attachmentsByEntry[entry.id] ?? [],
+        attachments: attachmentMap[entry.id!] ?? [],
       );
     }).toList();
   }
@@ -299,16 +349,6 @@ class DatabaseService {
     await db.delete('entries', where: 'id = ?', whereArgs: [id]);
   }
 
-  /// Returns the number of entries in a topic.
-  Future<int> getEntryCount(int topicId) async {
-    final db = await database;
-    final result = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM entries WHERE topic_id = ?',
-      [topicId],
-    );
-    return Sqflite.firstIntValue(result) ?? 0;
-  }
-
   // ---------------------------------------------------------------------------
   // Entry Attachments CRUD
   // ---------------------------------------------------------------------------
@@ -316,8 +356,7 @@ class DatabaseService {
   Future<EntryAttachment> insertEntryAttachment({
     required int entryId,
     required String filePath,
-    required String mediaType,
-    int sortOrder = 0,
+    String mediaType = 'image',
     String? fileName,
     int? fileSize,
     String? mimeType,
@@ -328,7 +367,6 @@ class DatabaseService {
       entryId: entryId,
       filePath: filePath,
       mediaType: mediaType,
-      sortOrder: sortOrder,
       createdAt: now,
       fileName: fileName,
       fileSize: fileSize,
@@ -338,7 +376,7 @@ class DatabaseService {
     return attachment.copyWith(id: id);
   }
 
-  /// Returns all attachments for an entry, ordered by sort_order.
+  /// Returns all attachments for a given entry.
   Future<List<EntryAttachment>> getEntryAttachments(int entryId) async {
     final db = await database;
     final rows = await db.query(
@@ -416,6 +454,53 @@ class DatabaseService {
       where: 'url = ?',
       whereArgs: [url],
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Full-text search (FTS5)
+  // ---------------------------------------------------------------------------
+
+  /// Searches entries by content using FTS5 full-text search.
+  ///
+  /// Returns results ranked by BM25 relevance, limited to 50 entries.
+  /// The query is sanitised: special FTS5 characters are stripped and
+  /// each word gets a `*` suffix for prefix matching.
+  Future<List<SearchResult>> searchEntries(String query) async {
+    final ftsQuery = _sanitizeFtsQuery(query);
+    if (ftsQuery.isEmpty) return [];
+
+    final db = await database;
+    try {
+      final rows = await db.rawQuery('''
+        SELECT e.id, e.topic_id, e.content, e.created_at,
+               t.title AS topic_title
+          FROM entries_fts fts
+          JOIN entries e ON e.id = fts.rowid
+          JOIN topics t ON t.id = e.topic_id
+         WHERE entries_fts MATCH ?
+         ORDER BY fts.rank
+         LIMIT 50
+      ''', [ftsQuery]);
+      return rows.map((row) => SearchResult.fromMap(row)).toList();
+    } catch (e) {
+      // FTS5 query error (malformed query, etc.) — return empty.
+      return [];
+    }
+  }
+
+  /// Sanitises user input for FTS5 MATCH.
+  ///
+  /// Strips non-word characters (FTS5 special operators like `AND`, `OR`,
+  /// `NOT`, `*`, `"`, etc.) and adds `*` to each word for prefix matching.
+  /// Example: «прив мир» → `прив* мир*`.
+  static String _sanitizeFtsQuery(String input) {
+    final cleaned = input.replaceAll(RegExp(r'[^\w\s]', unicode: true), '');
+    final words = cleaned
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .map((w) => '$w*')
+        .toList();
+    return words.join(' ');
   }
 
   // ---------------------------------------------------------------------------
