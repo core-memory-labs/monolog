@@ -6,11 +6,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/entry_with_images.dart';
 import '../utils/date_format.dart';
+import '../utils/markdown_parser.dart';
 
 /// Displays a single entry in the feed.
 ///
-/// Shows an optional image preview, recognises URLs in content, and renders
-/// them as tappable links. Shows the creation timestamp below.
+/// Shows an optional image preview, parses Markdown formatting in content,
+/// recognises URLs as tappable links, and shows the creation timestamp.
 /// When [isSelected] is true the background is highlighted.
 class EntryBubble extends StatelessWidget {
   final EntryWithImages data;
@@ -25,13 +26,6 @@ class EntryBubble extends StatelessWidget {
     this.onLongPress,
     this.onImageTap,
   });
-
-  /// Matches http / https URLs, stopping before trailing punctuation that is
-  /// unlikely to be part of the URL itself.
-  static final _urlRegex = RegExp(
-    r'https?://[^\s<>\[\]{}|\\^`"]+[^\s<>\[\]{}|\\^`".,;:!?\-)]',
-    caseSensitive: false,
-  );
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +65,8 @@ class EntryBubble extends StatelessWidget {
                             height: 100,
                             color: theme.colorScheme.surfaceContainerHighest,
                             child: const Center(
-                              child: Icon(Icons.broken_image_outlined, size: 32),
+                              child:
+                                  Icon(Icons.broken_image_outlined, size: 32),
                             ),
                           ),
                         ),
@@ -81,14 +76,8 @@ class EntryBubble extends StatelessWidget {
                 ),
               ),
 
-            // Text content (skip if empty — image-only entry)
-            if (hasContent)
-              RichText(
-                text: TextSpan(
-                  style: theme.textTheme.bodyLarge,
-                  children: _buildSpans(context),
-                ),
-              ),
+            // Formatted text content (skip if empty — image-only entry)
+            if (hasContent) ..._buildContent(context),
             if (hasContent) const SizedBox(height: 4),
 
             // Timestamp
@@ -104,45 +93,131 @@ class EntryBubble extends StatelessWidget {
     );
   }
 
-  List<TextSpan> _buildSpans(BuildContext context) {
+  // ---------------------------------------------------------------------------
+  // Markdown rendering
+  // ---------------------------------------------------------------------------
+
+  /// Parses the entry content as Markdown and returns a list of widgets —
+  /// one per block (paragraph, code block, or quote).
+  List<Widget> _buildContent(BuildContext context) {
     final theme = Theme.of(context);
-    final text = data.entry.content;
-    final spans = <TextSpan>[];
-    final matches = _urlRegex.allMatches(text);
-    int lastEnd = 0;
+    final blocks = parseMarkdown(data.entry.content);
+    if (blocks.isEmpty) return [];
 
-    for (final match in matches) {
-      if (match.start > lastEnd) {
-        spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+    final widgets = <Widget>[];
+
+    for (int i = 0; i < blocks.length; i++) {
+      if (i > 0) widgets.add(const SizedBox(height: 6));
+
+      switch (blocks[i].type) {
+        case BlockType.paragraph:
+          widgets.add(
+            RichText(
+              text: TextSpan(
+                style: theme.textTheme.bodyLarge,
+                children: _inlineSpansToTextSpans(blocks[i].spans, theme),
+              ),
+            ),
+          );
+        case BlockType.codeBlock:
+          widgets.add(_buildCodeBlock(blocks[i].rawContent, theme));
+        case BlockType.quote:
+          widgets.add(_buildQuoteBlock(blocks[i].spans, theme));
       }
+    }
 
-      final url = match.group(0)!;
-      spans.add(
-        TextSpan(
-          text: url,
-          style: TextStyle(
-            color: theme.colorScheme.primary,
-            decoration: TextDecoration.underline,
+    return widgets;
+  }
+
+  /// Renders a fenced code block as a monospace container.
+  static Widget _buildCodeBlock(String code, ThemeData theme) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Text(
+          code,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontFamily: 'monospace',
+            fontSize: 13,
           ),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () => launchUrl(
-                  Uri.parse(url),
-                  mode: LaunchMode.externalApplication,
-                ),
         ),
-      );
+      ),
+    );
+  }
 
-      lastEnd = match.end;
-    }
+  /// Renders a quote block with a coloured left border.
+  static Widget _buildQuoteBlock(List<StyledSpan> spans, ThemeData theme) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(
+            color: theme.colorScheme.primary.withValues(alpha: 0.5),
+            width: 3,
+          ),
+        ),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontStyle: FontStyle.italic,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          children: _inlineSpansToTextSpans(spans, theme),
+        ),
+      ),
+    );
+  }
 
-    if (lastEnd < text.length) {
-      spans.add(TextSpan(text: text.substring(lastEnd)));
-    }
-
-    if (spans.isEmpty) {
-      spans.add(TextSpan(text: text));
-    }
-
-    return spans;
+  /// Converts parser [StyledSpan]s into Flutter [TextSpan]s with the
+  /// appropriate styles and gesture recognisers.
+  static List<TextSpan> _inlineSpansToTextSpans(
+    List<StyledSpan> spans,
+    ThemeData theme,
+  ) {
+    return spans.map((span) {
+      return switch (span.style) {
+        InlineStyle.plain => TextSpan(text: span.text),
+        InlineStyle.bold => TextSpan(
+            text: span.text,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        InlineStyle.italic => TextSpan(
+            text: span.text,
+            style: const TextStyle(fontStyle: FontStyle.italic),
+          ),
+        InlineStyle.strikethrough => TextSpan(
+            text: span.text,
+            style: const TextStyle(decoration: TextDecoration.lineThrough),
+          ),
+        InlineStyle.code => TextSpan(
+            text: span.text,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              backgroundColor: theme.colorScheme.surfaceContainerHighest,
+            ),
+          ),
+        InlineStyle.url => TextSpan(
+            text: span.text,
+            style: TextStyle(
+              color: theme.colorScheme.primary,
+              decoration: TextDecoration.underline,
+            ),
+            recognizer: TapGestureRecognizer()
+              ..onTap = () => launchUrl(
+                    Uri.parse(span.text),
+                    mode: LaunchMode.externalApplication,
+                  ),
+          ),
+      };
+    }).toList();
   }
 }
