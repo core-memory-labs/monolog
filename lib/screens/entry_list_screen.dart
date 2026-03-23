@@ -61,6 +61,12 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   /// Attachment info when editing started — used to detect changes on submit.
   AttachmentInfo? _originalFile;
 
+  /// Original content text when editing started — used to detect changes.
+  String _originalContent = '';
+
+  /// Prevents duplicate submissions on rapid taps.
+  bool _isSubmitting = false;
+
   // --- Scroll-to-entry support ---
 
   /// Key placed on the target entry widget for [Scrollable.ensureVisible].
@@ -83,14 +89,32 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     setState(() => _selectedEntryId = null);
   }
 
-  void _cancelEdit() {
+  /// Cancels editing immediately without checking for unsaved changes.
+  void _forceCancelEdit() {
     setState(() {
       _editingEntryId = null;
       _attachedFile = null;
       _originalFile = null;
+      _originalContent = '';
     });
     _controller.clear();
     _focusNode.unfocus();
+  }
+
+  /// Checks if the user has unsaved changes and prompts for confirmation.
+  /// Cancels editing if confirmed or if there are no changes.
+  Future<void> _cancelEdit() async {
+    if (_editingEntryId == null) return;
+
+    final hasTextChanged = _controller.text.trim() != _originalContent;
+    final hasAttachmentChanged = _attachedFile?.path != _originalFile?.path;
+
+    if (hasTextChanged || hasAttachmentChanged) {
+      final confirmed = await showDiscardConfirmation(context);
+      if (confirmed != true) return;
+    }
+
+    _forceCancelEdit();
   }
 
   // ---------------------------------------------------------------------------
@@ -201,44 +225,51 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   Future<void> _submitEntry() async {
     final text = _controller.text.trim();
     if (text.isEmpty && _attachedFile == null) return;
+    if (_isSubmitting) return;
 
-    final notifier = ref.read(entryListProvider(widget.topicId).notifier);
+    _isSubmitting = true;
+    try {
+      final notifier = ref.read(entryListProvider(widget.topicId).notifier);
 
-    if (_editingEntryId != null) {
-      // Determine attachment changes.
-      final attachmentChanged = _attachedFile?.path != _originalFile?.path;
-      if (attachmentChanged) {
-        await notifier.updateEntry(
-          _editingEntryId!,
+      if (_editingEntryId != null) {
+        // Determine attachment changes.
+        final attachmentChanged = _attachedFile?.path != _originalFile?.path;
+        if (attachmentChanged) {
+          await notifier.updateEntry(
+            _editingEntryId!,
+            text,
+            newFilePath: _attachedFile?.path,
+            removeAttachment: _originalFile != null,
+            mediaType: _attachedFile?.isImage == true ? 'image' : 'file',
+            fileName: _attachedFile?.fileName,
+            fileSize: _attachedFile?.fileSize,
+            mimeType: _attachedFile?.mimeType,
+          );
+        } else {
+          await notifier.updateEntry(_editingEntryId!, text);
+        }
+      } else {
+        await notifier.addEntry(
           text,
-          newFilePath: _attachedFile?.path,
-          removeAttachment: _originalFile != null,
+          filePath: _attachedFile?.path,
           mediaType: _attachedFile?.isImage == true ? 'image' : 'file',
           fileName: _attachedFile?.fileName,
           fileSize: _attachedFile?.fileSize,
           mimeType: _attachedFile?.mimeType,
         );
-      } else {
-        await notifier.updateEntry(_editingEntryId!, text);
       }
-    } else {
-      await notifier.addEntry(
-        text,
-        filePath: _attachedFile?.path,
-        mediaType: _attachedFile?.isImage == true ? 'image' : 'file',
-        fileName: _attachedFile?.fileName,
-        fileSize: _attachedFile?.fileSize,
-        mimeType: _attachedFile?.mimeType,
-      );
-    }
 
-    _controller.clear();
-    _focusNode.unfocus();
-    setState(() {
-      _editingEntryId = null;
-      _attachedFile = null;
-      _originalFile = null;
-    });
+      _controller.clear();
+      _focusNode.unfocus();
+      setState(() {
+        _editingEntryId = null;
+        _attachedFile = null;
+        _originalFile = null;
+        _originalContent = '';
+      });
+    } finally {
+      _isSubmitting = false;
+    }
   }
 
   void _startEdit() {
@@ -265,6 +296,7 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
       _selectedEntryId = null;
       _attachedFile = fileInfo;
       _originalFile = fileInfo;
+      _originalContent = data.entry.content;
     });
 
     _controller.text = data.entry.content;
@@ -412,52 +444,56 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
           children: [
             // Entry feed
             Expanded(
-              child: entriesAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
-                error: (error, _) =>
-                    Center(child: Text('Ошибка: $error')),
-                data: (entries) {
-                  if (entries.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        'Нет записей.\nНапишите первую!',
-                        textAlign: TextAlign.center,
-                      ),
-                    );
-                  }
-
-                  // Schedule scroll to target after this build.
-                  _scrollToTargetIfNeeded();
-
-                  return ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: entries.length,
-                    separatorBuilder: (_, __) =>
-                        const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final data = entries[index];
-                      final isScrollTarget =
-                          data.entry.id == widget.scrollToEntryId &&
-                              !_hasScrolledToTarget;
-
-                      return EntryBubble(
-                        key: isScrollTarget ? _scrollTargetKey : null,
-                        data: data,
-                        isSelected: data.entry.id == _selectedEntryId,
-                        isHighlighted:
-                            data.entry.id == _highlightedEntryId,
-                        onLongPress: () {
-                          if (_editingEntryId != null) _cancelEdit();
-                          setState(
-                              () => _selectedEntryId = data.entry.id);
-                        },
-                        onImageTap: () => _openImageViewer(data),
-                        onFileTap: () => _openFile(data),
+              child: GestureDetector(
+                onTap: () => FocusScope.of(context).unfocus(),
+                behavior: HitTestBehavior.translucent,
+                child: entriesAsync.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) =>
+                      Center(child: Text('Ошибка: $error')),
+                  data: (entries) {
+                    if (entries.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'Нет записей.\nНапишите первую!',
+                          textAlign: TextAlign.center,
+                        ),
                       );
-                    },
-                  );
-                },
+                    }
+
+                    // Schedule scroll to target after this build.
+                    _scrollToTargetIfNeeded();
+
+                    return ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: entries.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final data = entries[index];
+                        final isScrollTarget =
+                            data.entry.id == widget.scrollToEntryId &&
+                                !_hasScrolledToTarget;
+
+                        return EntryBubble(
+                          key: isScrollTarget ? _scrollTargetKey : null,
+                          data: data,
+                          isSelected: data.entry.id == _selectedEntryId,
+                          isHighlighted:
+                              data.entry.id == _highlightedEntryId,
+                          onLongPress: () {
+                            if (_editingEntryId != null) _forceCancelEdit();
+                            setState(
+                                () => _selectedEntryId = data.entry.id);
+                          },
+                          onImageTap: () => _openImageViewer(data),
+                          onFileTap: () => _openFile(data),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
             ),
 

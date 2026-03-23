@@ -23,6 +23,7 @@ Future<String?> showEditDialog(
           controller: controller,
           autofocus: true,
           textCapitalization: TextCapitalization.sentences,
+          maxLength: 100,
           decoration: const InputDecoration(
             hintText: 'Название топика',
           ),
@@ -74,6 +75,32 @@ Future<bool?> showDeleteConfirmation(
               'Удалить',
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// Shows a confirmation dialog when the user tries to discard unsaved changes
+/// (e.g. cancelling an edit with modified text or attachment).
+///
+/// Returns `true` if the user confirms discarding, `false` / `null` otherwise.
+Future<bool?> showDiscardConfirmation(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) {
+      return AlertDialog(
+        title: const Text('Отменить изменения?'),
+        content: const Text('Несохранённые изменения будут потеряны.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Продолжить редактирование'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Отменить'),
           ),
         ],
       );

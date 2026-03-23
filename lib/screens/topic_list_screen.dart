@@ -29,6 +29,9 @@ class _TopicListScreenState extends ConsumerState<TopicListScreen> {
   /// Currently selected topic ID, or `null` when not in selection mode.
   int? _selectedTopicId;
 
+  /// Prevents duplicate topic creation on rapid taps.
+  bool _isCreating = false;
+
   @override
   void dispose() {
     _controller.dispose();
@@ -47,10 +50,16 @@ class _TopicListScreenState extends ConsumerState<TopicListScreen> {
   Future<void> _createTopic() async {
     final title = _controller.text.trim();
     if (title.isEmpty) return;
+    if (_isCreating) return;
 
-    _controller.clear();
-    _focusNode.unfocus();
-    await ref.read(topicListProvider.notifier).addTopic(title);
+    _isCreating = true;
+    try {
+      _controller.clear();
+      _focusNode.unfocus();
+      await ref.read(topicListProvider.notifier).addTopic(title);
+    } finally {
+      _isCreating = false;
+    }
   }
 
   void _onTopicTap(int topicId, String topicTitle) {
@@ -221,37 +230,41 @@ class _TopicListScreenState extends ConsumerState<TopicListScreen> {
           children: [
             // Topic list
             Expanded(
-              child: topicsAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
-                error: (error, _) =>
-                    Center(child: Text('Ошибка: $error')),
-                data: (topics) {
-                  if (topics.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        'Нет топиков.\nСоздайте первый!',
-                        textAlign: TextAlign.center,
-                      ),
-                    );
-                  }
-
-                  return ListView.separated(
-                    itemCount: topics.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final data = topics[index];
-                      return TopicTile(
-                        data: data,
-                        isSelected: data.topic.id == _selectedTopicId,
-                        onTap: () =>
-                            _onTopicTap(data.topic.id!, data.topic.title),
-                        onLongPress: () =>
-                            _onTopicLongPress(data.topic.id!),
+              child: GestureDetector(
+                onTap: () => FocusScope.of(context).unfocus(),
+                behavior: HitTestBehavior.translucent,
+                child: topicsAsync.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) =>
+                      Center(child: Text('Ошибка: $error')),
+                  data: (topics) {
+                    if (topics.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'Нет топиков.\nСоздайте первый!',
+                          textAlign: TextAlign.center,
+                        ),
                       );
-                    },
-                  );
-                },
+                    }
+
+                    return ListView.separated(
+                      itemCount: topics.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final data = topics[index];
+                        return TopicTile(
+                          data: data,
+                          isSelected: data.topic.id == _selectedTopicId,
+                          onTap: () =>
+                              _onTopicTap(data.topic.id!, data.topic.title),
+                          onLongPress: () =>
+                              _onTopicLongPress(data.topic.id!),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
             ),
 
@@ -298,12 +311,14 @@ class _TopicInput extends StatelessWidget {
                 focusNode: focusNode,
                 textCapitalization: TextCapitalization.sentences,
                 textInputAction: TextInputAction.done,
+                maxLength: 100,
                 decoration: const InputDecoration(
                   hintText: 'Новый топик…',
                   border: OutlineInputBorder(),
                   contentPadding:
                       EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   isDense: true,
+                  counterText: '', // Hide the counter below the field.
                 ),
                 onSubmitted: (_) => onSubmit(),
               ),

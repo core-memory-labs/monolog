@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/database_service.dart';
 import '../services/file_service.dart';
@@ -26,5 +27,18 @@ final fileServiceProvider = Provider<FileService>((ref) {
 final linkPreviewServiceProvider = Provider<LinkPreviewService>((ref) {
   return LinkPreviewService(
     db: ref.read(databaseServiceProvider),
+  );
+});
+
+/// [SharedPreferences] instance, eagerly initialised in `main.dart` and
+/// injected via `ProviderContainer.overrides`.
+///
+/// Used by [ThemeNotifier] (and potentially future settings) to persist
+/// user preferences across app restarts.
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  // This provider is always overridden in main.dart with an actual instance.
+  // If accessed without override, something is wrong.
+  throw UnimplementedError(
+    'sharedPreferencesProvider must be overridden with a real instance',
   );
 });

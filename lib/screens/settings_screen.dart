@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../providers/theme_notifier.dart';
 import '../providers/topic_list_notifier.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
@@ -10,7 +11,7 @@ import '../services/file_service.dart';
 import '../services/telegram_import_service.dart';
 import '../providers/providers.dart';
 
-/// Settings screen with export and import options.
+/// Settings screen with theme switching, export and import options.
 ///
 /// Accessible via the ⚙️ icon in the topic list AppBar.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -130,10 +131,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final currentTheme = ref.watch(themeProvider);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Настройки')),
       body: ListView(
         children: [
+          // --- Appearance ---
+          const _SectionHeader('Оформление'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SegmentedButton<ThemeMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ThemeMode.system,
+                  label: Text('Системная'),
+                  icon: Icon(Icons.settings_brightness),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text('Светлая'),
+                  icon: Icon(Icons.light_mode),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text('Тёмная'),
+                  icon: Icon(Icons.dark_mode),
+                ),
+              ],
+              selected: {currentTheme},
+              onSelectionChanged: (selection) {
+                ref
+                    .read(themeProvider.notifier)
+                    .setThemeMode(selection.first);
+              },
+            ),
+          ),
+          const Divider(),
+
+          // --- Data ---
           const _SectionHeader('Данные'),
           ListTile(
             leading: const Icon(Icons.upload),
@@ -164,6 +200,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onTap: _importFromTelegram,
           ),
           const Divider(),
+
+          // --- About ---
           const _SectionHeader('О приложении'),
           const ListTile(
             leading: Icon(Icons.info_outline),

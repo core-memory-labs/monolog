@@ -2,19 +2,21 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
+import 'providers/theme_notifier.dart';
 import 'screens/share_receiver_screen.dart';
 import 'screens/topic_list_screen.dart';
 
-class MonologApp extends StatefulWidget {
+class MonologApp extends ConsumerStatefulWidget {
   const MonologApp({super.key});
 
   @override
-  State<MonologApp> createState() => _MonologAppState();
+  ConsumerState<MonologApp> createState() => _MonologAppState();
 }
 
-class _MonologAppState extends State<MonologApp> {
+class _MonologAppState extends ConsumerState<MonologApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   StreamSubscription<List<SharedMediaFile>>? _mediaStreamSub;
@@ -127,10 +129,13 @@ class _MonologAppState extends State<MonologApp> {
 
   @override
   Widget build(BuildContext context) {
+    final themeMode = ref.watch(themeProvider);
+
     return MaterialApp(
       title: 'Monolog',
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
       theme: ThemeData(
         colorSchemeSeed: Colors.deepPurple,
         brightness: Brightness.light,
