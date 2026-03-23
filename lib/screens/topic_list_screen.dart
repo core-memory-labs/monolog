@@ -6,13 +6,15 @@ import '../utils/dialogs.dart';
 import '../widgets/topic_tile.dart';
 import 'entry_list_screen.dart';
 import 'search_screen.dart';
+import 'settings_screen.dart';
 
 /// Main screen — displays all topics with an inline input field at the bottom
 /// for quick topic creation.
 ///
 /// Long press on a topic enters selection mode: the AppBar changes to show
 /// contextual actions (pin, edit, delete). A search icon (🔍) in the AppBar
-/// opens the full-text search screen.
+/// opens the full-text search screen. A settings icon (⚙️) opens the
+/// settings screen with export/import options.
 class TopicListScreen extends ConsumerStatefulWidget {
   const TopicListScreen({super.key});
 
@@ -140,6 +142,13 @@ class _TopicListScreenState extends ConsumerState<TopicListScreen> {
     );
   }
 
+  void _openSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
@@ -187,6 +196,11 @@ class _TopicListScreenState extends ConsumerState<TopicListScreen> {
           icon: const Icon(Icons.search),
           tooltip: 'Поиск',
           onPressed: _openSearch,
+        ),
+        IconButton(
+          icon: const Icon(Icons.settings),
+          tooltip: 'Настройки',
+          onPressed: _openSettings,
         ),
       ],
     );

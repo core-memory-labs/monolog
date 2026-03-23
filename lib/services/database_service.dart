@@ -264,9 +264,10 @@ class DatabaseService {
   Future<Entry> insertEntry({
     required int topicId,
     required String content,
+    DateTime? createdAt,
   }) async {
     final db = await database;
-    final now = DateTime.now();
+    final now = createdAt ?? DateTime.now();
     final entry = Entry(
       topicId: topicId,
       content: content,
@@ -515,3 +516,5 @@ class DatabaseService {
     }
   }
 }
+
+
