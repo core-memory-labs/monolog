@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -61,8 +62,9 @@ class _MonologAppState extends ConsumerState<MonologApp> {
   /// Listens for shared data arriving while the app is already running
   /// (warm start / app in background).
   void _listenShareStream() {
-    _mediaStreamSub =
-        ReceiveSharingIntent.instance.getMediaStream().listen((media) {
+    _mediaStreamSub = ReceiveSharingIntent.instance.getMediaStream().listen((
+      media,
+    ) {
       if (media.isNotEmpty) {
         _handleSharedMedia(media.first);
       }
@@ -81,7 +83,18 @@ class _MonologAppState extends ConsumerState<MonologApp> {
     String? fileMimeType;
 
     if (file.type == SharedMediaType.text || file.type == SharedMediaType.url) {
-      sharedText = file.path;
+      // Some file managers share text-based files (.md, .txt, .csv) with
+      // MIME type text/* which receive_sharing_intent classifies as
+      // SharedMediaType.text. In this case file.path is a filesystem path,
+      // not the actual text content. Detect this by checking if the path
+      // points to an existing file on disk.
+      final maybeFile = File(file.path);
+      if (maybeFile.existsSync()) {
+        filePath = file.path;
+        fileMimeType = file.mimeType;
+      } else {
+        sharedText = file.path;
+      }
     } else if (file.type == SharedMediaType.image) {
       imagePath = file.path;
     } else if (file.type == SharedMediaType.file ||
