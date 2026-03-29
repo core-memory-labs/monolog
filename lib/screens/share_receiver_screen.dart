@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../providers/entry_list_notifier.dart';
 import '../providers/topic_list_notifier.dart';
 import '../providers/providers.dart';
 import '../utils/file_utils.dart';
@@ -18,6 +19,9 @@ import '../widgets/file_card.dart';
 ///
 /// [onDone] is called after saving or cancelling to let the parent handle
 /// cleanup (reset share intent data, close app if cold start).
+///
+/// Note: [onDone] must NOT be called explicitly alongside [Navigator.pop] —
+/// the [PopScope] wrapper calls it automatically on any pop event.
 class ShareReceiverScreen extends ConsumerStatefulWidget {
   final String? sharedImagePath;
   final String? sharedText;
@@ -115,8 +119,11 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
         );
       }
 
-      // Refresh topic list so counters update.
+      // Refresh topic list counters and the entry feed for the target topic.
+      // Without invalidating entryListProvider the feed would show stale data
+      // until the user manually adds another entry.
       ref.invalidate(topicListProvider);
+      ref.invalidate(entryListProvider(topicId));
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -126,9 +133,9 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
           ),
         );
 
-        // Pop this screen first, then let onDone handle app closure.
+        // Pop this screen. PopScope.onPopInvokedWithResult will call onDone —
+        // do NOT call it again here or it fires twice.
         Navigator.pop(context);
-        widget.onDone();
       }
     } catch (e) {
       setState(() => _isSaving = false);
@@ -191,7 +198,9 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
         );
       }
 
+      // Refresh topic list counters and the entry feed for the new topic.
       ref.invalidate(topicListProvider);
+      ref.invalidate(entryListProvider(topic.id!));
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -201,8 +210,8 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
           ),
         );
 
+        // Pop this screen. PopScope.onPopInvokedWithResult will call onDone.
         Navigator.pop(context);
-        widget.onDone();
       }
     } catch (e) {
       setState(() => _isSaving = false);
@@ -215,8 +224,8 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
   }
 
   void _cancel() {
+    // Pop this screen. PopScope.onPopInvokedWithResult will call onDone.
     Navigator.pop(context);
-    widget.onDone();
   }
 
   // ---------------------------------------------------------------------------

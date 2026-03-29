@@ -25,6 +25,13 @@ class _MonologAppState extends ConsumerState<MonologApp> {
   /// Determines whether to close the entire app after saving.
   bool _launchedViaShare = false;
 
+  /// Guards against duplicate share handling.
+  ///
+  /// receive_sharing_intent on some Android devices emits the same intent
+  /// through both getInitialMedia() and getMediaStream(). This flag ensures
+  /// we only push ShareReceiverScreen once per intent.
+  bool _processingShare = false;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +70,11 @@ class _MonologAppState extends ConsumerState<MonologApp> {
   }
 
   void _handleSharedMedia(SharedMediaFile file) {
+    // Guard against duplicate emissions: receive_sharing_intent may fire the
+    // same intent through both getInitialMedia() and getMediaStream().
+    if (_processingShare) return;
+    _processingShare = true;
+
     String? imagePath;
     String? sharedText;
     String? filePath;
@@ -74,11 +86,11 @@ class _MonologAppState extends ConsumerState<MonologApp> {
       imagePath = file.path;
     } else if (file.type == SharedMediaType.file ||
         file.type == SharedMediaType.video) {
-      // Treat video and generic files the same way (no video player in MVP).
       filePath = file.path;
       fileMimeType = file.mimeType;
     } else {
-      // Unsupported type — ignore.
+      // Unsupported type — release the guard and ignore.
+      _processingShare = false;
       return;
     }
 
@@ -115,6 +127,8 @@ class _MonologAppState extends ConsumerState<MonologApp> {
   /// Called by [ShareReceiverScreen] after saving or cancelling.
   void _onShareDone() {
     ReceiveSharingIntent.instance.reset();
+    // Release the guard so the next share intent is handled correctly.
+    _processingShare = false;
 
     if (_launchedViaShare) {
       // Close the entire app and return to the source app.
