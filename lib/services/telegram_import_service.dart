@@ -33,8 +33,14 @@ class TelegramImportResult {
 ///
 /// Topics are identified from service messages with `action: "topic_created"`.
 /// Regular messages reference their topic via `reply_to_message_id`.
-/// Messages without a topic reference go to a "General" topic (named after
-/// the group).
+///
+/// **Reply chain resolution:** When a message's `reply_to_message_id` points
+/// to another regular message (not a topic), the chain is traced upwards until
+/// a `topic_created` service message is found. This handles replies-to-replies
+/// which are common in Telegram topic groups.
+///
+/// Messages that cannot be traced to any topic go to a "General" topic
+/// (named after the group).
 class TelegramImportService {
   final DatabaseService _db;
   final FileService _fileService;
@@ -139,6 +145,25 @@ class TelegramImportService {
     final groupName = (data['name'] as String?) ?? 'General';
     final messages = data['messages'] as List<dynamic>? ?? [];
 
+    // Validate that this looks like a Telegram export.
+    if (messages.isEmpty) {
+      throw const FormatException(
+        'Файл result.json не содержит сообщений — '
+        'проверьте, что это экспорт чата с топиками',
+      );
+    }
+
+    // --- Build message lookup for reply chain resolution ---------------------
+    // Map: telegram message_id → message object.
+    final msgById = <int, Map<String, dynamic>>{};
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+      final id = _toInt(msg['id']);
+      if (id != null) {
+        msgById[id] = msg;
+      }
+    }
+
     // --- First pass: collect topic names from service messages ----------------
     // Map: telegram message_id → topic title.
     final topicTitleMap = <int, String>{};
@@ -148,11 +173,10 @@ class TelegramImportService {
       if (msg['type'] != 'service') continue;
       if (msg['action'] != 'topic_created') continue;
 
-      final id = msg['id'];
+      final id = _toInt(msg['id']);
       final title = msg['title'] as String?;
       if (id != null && title != null) {
-        topicTitleMap[id is int ? id : int.tryParse(id.toString()) ?? 0] =
-            title;
+        topicTitleMap[id] = title;
       }
     }
 
@@ -174,9 +198,13 @@ class TelegramImportService {
       existingNames.add(uniqueTitle.toLowerCase());
     }
 
-    // "General" topic for messages without reply_to_message_id.
+    // "General" topic for messages that can't be traced to any topic.
     // Created lazily — only if there are such messages.
     int? generalTopicId;
+
+    // Cache for resolved topic IDs: telegram message_id → Monolog topic ID.
+    // Avoids redundant chain traversals for the same message.
+    final resolvedTopicCache = <int, int?>{};
 
     // --- Second pass: process messages ---------------------------------------
     var entryCount = 0;
@@ -187,23 +215,22 @@ class TelegramImportService {
       if (msg is! Map<String, dynamic>) continue;
       if (msg['type'] != 'message') continue;
 
-      // Determine topic.
-      final replyTo = msg['reply_to_message_id'];
+      // Determine topic via reply chain resolution.
+      final replyTo = _toInt(msg['reply_to_message_id']);
       int? topicId;
 
       if (replyTo != null) {
-        final replyToInt =
-            replyTo is int ? replyTo : int.tryParse(replyTo.toString());
-        if (replyToInt != null) {
-          final topicTitle = topicTitleMap[replyToInt];
-          if (topicTitle != null) {
-            topicId = topicIdMap[topicTitle];
-          }
-        }
+        topicId = _resolveTopicId(
+          replyTo,
+          topicTitleMap,
+          topicIdMap,
+          msgById,
+          resolvedTopicCache,
+        );
       }
 
       if (topicId == null) {
-        // No topic found — use General.
+        // No topic found even after chain tracing — use General.
         if (generalTopicId == null) {
           final uniqueTitle = _uniqueTitle(groupName, existingNames);
           final topic = await _db.insertTopic(uniqueTitle);
@@ -272,6 +299,69 @@ class TelegramImportService {
   }
 
   // ---------------------------------------------------------------------------
+  // Reply chain resolution
+  // ---------------------------------------------------------------------------
+
+  /// Traces the reply chain from [messageId] upwards until a `topic_created`
+  /// service message is found.
+  ///
+  /// In Telegram topic groups, a message may reply to another message (not
+  /// directly to the topic). For example:
+  ///   msg 184 → reply_to 183 → reply_to 32 (topic "Что прочитать?")
+  ///
+  /// Without chain resolution, msg 184 would be incorrectly placed in General.
+  ///
+  /// Results are cached in [cache] to avoid redundant traversals.
+  /// Max depth is 50 to prevent infinite loops on malformed data.
+  int? _resolveTopicId(
+    int messageId,
+    Map<int, String> topicTitleMap,
+    Map<String, int> topicIdMap,
+    Map<int, Map<String, dynamic>> msgById,
+    Map<int, int?> cache,
+  ) {
+    // Check cache first.
+    if (cache.containsKey(messageId)) {
+      return cache[messageId];
+    }
+
+    // Trace the chain iteratively (avoids stack overflow on deep chains).
+    var currentId = messageId;
+    final visited = <int>{}; // cycle detection
+
+    while (visited.length < 50) {
+      if (visited.contains(currentId)) break; // cycle detected
+      visited.add(currentId);
+
+      // Is this a topic_created message?
+      final topicTitle = topicTitleMap[currentId];
+      if (topicTitle != null) {
+        final topicId = topicIdMap[topicTitle];
+        // Cache all visited nodes — they all belong to this topic.
+        for (final id in visited) {
+          cache[id] = topicId;
+        }
+        return topicId;
+      }
+
+      // Follow the reply chain.
+      final msg = msgById[currentId];
+      if (msg == null) break;
+
+      final parentId = _toInt(msg['reply_to_message_id']);
+      if (parentId == null) break;
+
+      currentId = parentId;
+    }
+
+    // Could not resolve — cache null to avoid re-traversal.
+    for (final id in visited) {
+      cache[id] = null;
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
   // Text conversion: Telegram text_entities → Monolog markdown
   // ---------------------------------------------------------------------------
 
@@ -308,11 +398,19 @@ class TelegramImportService {
       'strikethrough' => '~$text~',
       'code' => '`$text`',
       'pre' => '```\n$text\n```',
+      'blockquote' => _formatBlockquote(text),
       'link' => text, // URL — detection handles it.
       'text_link' => _formatTextLink(text, segment),
-      // underline, spoiler, mention, etc. — pass through as plain text.
+      // underline, spoiler, mention, hashtag, email, phone,
+      // custom_emoji, etc. — pass through as plain text.
       _ => text,
     };
+  }
+
+  /// Converts blockquote text to Monolog quote syntax (`> ` prefix per line).
+  String _formatBlockquote(String text) {
+    final lines = text.split('\n');
+    return lines.map((line) => '> $line').join('\n');
   }
 
   String _formatTextLink(String text, Map<String, dynamic> segment) {
@@ -398,6 +496,13 @@ class TelegramImportService {
       counter++;
     }
     return '$title ($counter)';
+  }
+
+  /// Safely converts a dynamic value to int.
+  static int? _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 }
 
