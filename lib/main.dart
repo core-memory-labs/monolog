@@ -33,7 +33,7 @@ void main() async {
       sharedPreferencesProvider.overrideWithValue(prefs),
     ],
   );
-  await container.read(databaseServiceProvider).database;
+  await container.read(databaseServiceProvider).init();
 
   runApp(
     UncontrolledProviderScope(

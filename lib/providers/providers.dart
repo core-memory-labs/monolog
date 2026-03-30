@@ -4,10 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/database_service.dart';
 import '../services/file_service.dart';
 import '../services/link_preview_service.dart';
+import '../services/sqlite_database_service.dart';
+import '../services/local_file_service.dart';
 
 /// Single instance of [DatabaseService] shared across the app.
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
-  final service = DatabaseService();
+  final service = SqliteDatabaseService();
   ref.onDispose(() => service.close());
   return service;
 });
@@ -17,7 +19,7 @@ final databaseServiceProvider = Provider<DatabaseService>((ref) {
 /// Handles saving and deleting attachment files (images and other files)
 /// on disk. Renamed from `imageServiceProvider` in Stage 3.4.
 final fileServiceProvider = Provider<FileService>((ref) {
-  return FileService();
+  return LocalFileService();
 });
 
 /// Single instance of [LinkPreviewService] shared across the app.

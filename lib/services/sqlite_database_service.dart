@@ -1,0 +1,529 @@
+import 'package:path/path.dart' show join;
+import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_common/sqlite_api.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import '../models/entry.dart';
+import '../models/entry_attachment.dart';
+import '../models/entry_with_attachment.dart';
+import '../models/link_preview.dart';
+import '../models/search_result.dart';
+import '../models/topic.dart';
+import '../models/topic_with_stats.dart';
+import 'database_service.dart';
+
+/// SQLite-backed implementation of [DatabaseService].
+///
+/// Uses `sqflite_common_ffi` + `sqlite3_flutter_libs` for FTS5 support.
+/// Database schema is version 5.
+class SqliteDatabaseService implements DatabaseService {
+  static const _databaseName = 'monolog.db';
+  static const _databaseVersion = 5;
+
+  Database? _database;
+
+  /// Visible for testing: allows creating an instance with a pre-opened
+  /// database (e.g. in-memory). When set, [init] is a no-op.
+  SqliteDatabaseService({Database? database}) : _database = database;
+
+  /// Returns the database, initialising it lazily if needed.
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  @override
+  Future<void> init() async {
+    await database;
+  }
+
+  Future<Database> _initDatabase() async {
+    final documentsDir = await getApplicationDocumentsDirectory();
+    final path = join(documentsDir.path, _databaseName);
+
+    return openDatabase(
+      path,
+      version: _databaseVersion,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+      onConfigure: _onConfigure,
+    );
+  }
+
+  Future<void> _onConfigure(Database db) async {
+    await db.execute('PRAGMA foreign_keys = ON');
+  }
+
+  Future<void> _onCreate(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE topics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        topic_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE
+      )
+    ''');
+
+    await _createEntryAttachmentsTable(db);
+    await _createLinkPreviewsTable(db);
+    await _createFts5Table(db);
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // v1 had no attachments table. Create the final schema directly —
+      // skip the intermediate entry_images table from v2.
+      await _createEntryAttachmentsTable(db);
+    } else if (oldVersion < 3) {
+      // v2 had entry_images. Rename and add new columns.
+      await db.execute('ALTER TABLE entry_images RENAME TO entry_attachments');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN file_name TEXT');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN file_size INTEGER');
+      await db.execute(
+          'ALTER TABLE entry_attachments ADD COLUMN mime_type TEXT');
+    }
+
+    if (oldVersion < 4) {
+      await _createLinkPreviewsTable(db);
+    }
+
+    if (oldVersion < 5) {
+      await _createFts5Table(db);
+      // Populate FTS5 index from existing entries.
+      await _populateFts5Index(db);
+    }
+  }
+
+  /// Creates the `entry_attachments` table with all columns (v3 schema).
+  Future<void> _createEntryAttachmentsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE entry_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id INTEGER NOT NULL,
+        image_path TEXT NOT NULL,
+        media_type TEXT NOT NULL DEFAULT 'image',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        file_name TEXT,
+        file_size INTEGER,
+        mime_type TEXT,
+        FOREIGN KEY (entry_id) REFERENCES entries (id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  /// Creates the `link_previews` table (v4 schema).
+  Future<void> _createLinkPreviewsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE link_previews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT NOT NULL UNIQUE,
+        title TEXT,
+        description TEXT,
+        image_url TEXT,
+        image_path TEXT,
+        site_name TEXT,
+        fetched_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  /// Creates the FTS5 virtual table and synchronisation triggers (v5 schema).
+  ///
+  /// Uses external content mode (`content=entries, content_rowid=id`) so the
+  /// FTS index does not duplicate entry text storage. Triggers keep the index
+  /// in sync with the `entries` table.
+  Future<void> _createFts5Table(Database db) async {
+    await db.execute('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts
+      USING fts5(content, content=entries, content_rowid=id)
+    ''');
+
+    // After INSERT on entries → add to FTS.
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+        INSERT INTO entries_fts(rowid, content) VALUES (new.id, new.content);
+      END
+    ''');
+
+    // Before DELETE on entries → remove from FTS.
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+        INSERT INTO entries_fts(entries_fts, rowid, content) VALUES('delete', old.id, old.content);
+      END
+    ''');
+
+    // After UPDATE on entries → update FTS.
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE ON entries BEGIN
+        INSERT INTO entries_fts(entries_fts, rowid, content) VALUES('delete', old.id, old.content);
+        INSERT INTO entries_fts(rowid, content) VALUES (new.id, new.content);
+      END
+    ''');
+  }
+
+  /// Backfills the FTS5 index from existing entries (used during migration).
+  Future<void> _populateFts5Index(Database db) async {
+    await db.execute('''
+      INSERT INTO entries_fts(rowid, content)
+      SELECT id, content FROM entries
+    ''');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Topics CRUD
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<Topic> insertTopic(String title) async {
+    final db = await database;
+    final now = DateTime.now();
+    final topic = Topic(
+      title: title,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final id = await db.insert('topics', topic.toMap());
+    return topic.copyWith(id: id);
+  }
+
+  @override
+  Future<List<Topic>> getTopics() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT t.*,
+             COALESCE(MAX(e.created_at), t.updated_at) AS last_activity
+        FROM topics t
+        LEFT JOIN entries e ON e.topic_id = t.id
+       GROUP BY t.id
+       ORDER BY t.is_pinned DESC, last_activity DESC
+    ''');
+    return rows.map((row) => Topic.fromMap(row)).toList();
+  }
+
+  @override
+  Future<List<TopicWithStats>> getTopicsWithStats() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT t.*,
+             COALESCE(MAX(e.created_at), t.updated_at) AS last_activity,
+             COUNT(e.id) AS entry_count
+        FROM topics t
+        LEFT JOIN entries e ON e.topic_id = t.id
+       GROUP BY t.id
+       ORDER BY t.is_pinned DESC, last_activity DESC
+    ''');
+    return rows.map((row) {
+      return TopicWithStats(
+        topic: Topic.fromMap(row),
+        entryCount: row['entry_count'] as int,
+        lastActivity: DateTime.parse(row['last_activity'] as String),
+      );
+    }).toList();
+  }
+
+  @override
+  Future<Topic?> getTopicById(int id) async {
+    final db = await database;
+    final rows = await db.query('topics', where: 'id = ?', whereArgs: [id]);
+    if (rows.isEmpty) return null;
+    return Topic.fromMap(rows.first);
+  }
+
+  @override
+  Future<void> updateTopic(Topic topic) async {
+    final db = await database;
+    final updated = topic.copyWith(updatedAt: DateTime.now());
+    await db.update(
+      'topics',
+      updated.toMap(),
+      where: 'id = ?',
+      whereArgs: [topic.id],
+    );
+  }
+
+  @override
+  Future<void> deleteTopic(int id) async {
+    final db = await database;
+    await db.delete('topics', where: 'id = ?', whereArgs: [id]);
+  }
+
+  @override
+  Future<void> togglePin(int id, {required bool isPinned}) async {
+    final db = await database;
+    await db.update(
+      'topics',
+      {
+        'is_pinned': isPinned ? 1 : 0,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entries CRUD
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<Entry> insertEntry({
+    required int topicId,
+    required String content,
+    DateTime? createdAt,
+  }) async {
+    final db = await database;
+    final now = createdAt ?? DateTime.now();
+    final entry = Entry(
+      topicId: topicId,
+      content: content,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final id = await db.insert('entries', entry.toMap());
+    return entry.copyWith(id: id);
+  }
+
+  @override
+  Future<List<Entry>> getEntries(int topicId) async {
+    final db = await database;
+    final rows = await db.query(
+      'entries',
+      where: 'topic_id = ?',
+      whereArgs: [topicId],
+      orderBy: 'created_at DESC',
+    );
+    return rows.map((row) => Entry.fromMap(row)).toList();
+  }
+
+  @override
+  Future<List<EntryWithAttachment>> getEntriesWithAttachments(
+      int topicId) async {
+    final db = await database;
+
+    final entryRows = await db.query(
+      'entries',
+      where: 'topic_id = ?',
+      whereArgs: [topicId],
+      orderBy: 'created_at DESC',
+    );
+
+    if (entryRows.isEmpty) return [];
+
+    final entries = entryRows.map((row) => Entry.fromMap(row)).toList();
+    final entryIds = entries.map((e) => e.id!).toList();
+
+    // Fetch all attachments for these entries in one query.
+    final placeholders = List.filled(entryIds.length, '?').join(', ');
+    final attachmentRows = await db.rawQuery(
+      'SELECT * FROM entry_attachments WHERE entry_id IN ($placeholders) ORDER BY sort_order ASC',
+      entryIds,
+    );
+
+    final attachments =
+        attachmentRows.map((row) => EntryAttachment.fromMap(row)).toList();
+
+    // Group attachments by entry ID.
+    final attachmentMap = <int, List<EntryAttachment>>{};
+    for (final att in attachments) {
+      attachmentMap.putIfAbsent(att.entryId, () => []).add(att);
+    }
+
+    return entries.map((entry) {
+      return EntryWithAttachment(
+        entry: entry,
+        attachments: attachmentMap[entry.id!] ?? [],
+      );
+    }).toList();
+  }
+
+  @override
+  Future<void> updateEntry(Entry entry) async {
+    final db = await database;
+    final updated = entry.copyWith(updatedAt: DateTime.now());
+    await db.update(
+      'entries',
+      updated.toMap(),
+      where: 'id = ?',
+      whereArgs: [entry.id],
+    );
+  }
+
+  @override
+  Future<void> deleteEntry(int id) async {
+    final db = await database;
+    await db.delete('entries', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entry Attachments CRUD
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<EntryAttachment> insertEntryAttachment({
+    required int entryId,
+    required String filePath,
+    String mediaType = 'image',
+    String? fileName,
+    int? fileSize,
+    String? mimeType,
+  }) async {
+    final db = await database;
+    final now = DateTime.now();
+    final attachment = EntryAttachment(
+      entryId: entryId,
+      filePath: filePath,
+      mediaType: mediaType,
+      createdAt: now,
+      fileName: fileName,
+      fileSize: fileSize,
+      mimeType: mimeType,
+    );
+    final id = await db.insert('entry_attachments', attachment.toMap());
+    return attachment.copyWith(id: id);
+  }
+
+  @override
+  Future<List<EntryAttachment>> getEntryAttachments(int entryId) async {
+    final db = await database;
+    final rows = await db.query(
+      'entry_attachments',
+      where: 'entry_id = ?',
+      whereArgs: [entryId],
+      orderBy: 'sort_order ASC',
+    );
+    return rows.map((row) => EntryAttachment.fromMap(row)).toList();
+  }
+
+  @override
+  Future<void> deleteEntryAttachments(int entryId) async {
+    final db = await database;
+    await db.delete(
+      'entry_attachments',
+      where: 'entry_id = ?',
+      whereArgs: [entryId],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Link Previews CRUD
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<LinkPreview?> getLinkPreview(String url) async {
+    final db = await database;
+    final rows = await db.query(
+      'link_previews',
+      where: 'url = ?',
+      whereArgs: [url],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return LinkPreview.fromMap(rows.first);
+  }
+
+  @override
+  Future<LinkPreview> insertLinkPreview({
+    required String url,
+    String? title,
+    String? description,
+    String? imageUrl,
+    String? imagePath,
+    String? siteName,
+  }) async {
+    final db = await database;
+    final now = DateTime.now();
+    final preview = LinkPreview(
+      url: url,
+      title: title,
+      description: description,
+      imageUrl: imageUrl,
+      imagePath: imagePath,
+      siteName: siteName,
+      fetchedAt: now,
+    );
+    final id = await db.insert(
+      'link_previews',
+      preview.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return preview.copyWith(id: id);
+  }
+
+  @override
+  Future<void> deleteLinkPreview(String url) async {
+    final db = await database;
+    await db.delete(
+      'link_previews',
+      where: 'url = ?',
+      whereArgs: [url],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Full-text search (FTS5)
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<List<SearchResult>> searchEntries(String query) async {
+    final ftsQuery = _sanitizeFtsQuery(query);
+    if (ftsQuery.isEmpty) return [];
+
+    final db = await database;
+    try {
+      final rows = await db.rawQuery('''
+        SELECT e.id, e.topic_id, e.content, e.created_at,
+               t.title AS topic_title
+          FROM entries_fts fts
+          JOIN entries e ON e.id = fts.rowid
+          JOIN topics t ON t.id = e.topic_id
+         WHERE entries_fts MATCH ?
+         ORDER BY fts.rank
+         LIMIT 50
+      ''', [ftsQuery]);
+      return rows.map((row) => SearchResult.fromMap(row)).toList();
+    } catch (e) {
+      // FTS5 query error (malformed query, etc.) — return empty.
+      return [];
+    }
+  }
+
+  /// Sanitises user input for FTS5 MATCH.
+  static String _sanitizeFtsQuery(String input) {
+    final cleaned = input.replaceAll(RegExp(r'[^\w\s]', unicode: true), '');
+    final words = cleaned
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .map((w) => '$w*')
+        .toList();
+    return words.join(' ');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<void> close() async {
+    final db = _database;
+    if (db != null) {
+      await db.close();
+      _database = null;
+    }
+  }
+}
