@@ -121,6 +121,30 @@ class EntryListNotifier
     await future;
     ref.invalidate(topicListProvider);
   }
+
+  /// Deletes multiple entries and their attachment files from disk.
+  ///
+  /// Entries are deleted sequentially (SQLite does not handle concurrent
+  /// writes well). A single [invalidateSelf] + [topicListProvider] invalidation
+  /// is performed at the end for efficiency.
+  Future<void> deleteEntries(Set<int> entryIds) async {
+    if (entryIds.isEmpty) return;
+
+    final db = ref.read(databaseServiceProvider);
+    final fileService = ref.read(fileServiceProvider);
+
+    for (final entryId in entryIds) {
+      final attachments = await db.getEntryAttachments(entryId);
+      for (final att in attachments) {
+        await fileService.deleteFile(att.filePath);
+      }
+      await db.deleteEntry(entryId);
+    }
+
+    ref.invalidateSelf();
+    await future;
+    ref.invalidate(topicListProvider);
+  }
 }
 
 final entryListProvider = AsyncNotifierProvider.family<EntryListNotifier,

@@ -20,7 +20,10 @@ import 'image_viewer_screen.dart';
 /// Features:
 /// - Entries ordered newest-first, with optional image previews or file cards.
 /// - Multiline messenger-style input with 📎 for attachments (gallery/camera/file).
-/// - Long press → contextual AppBar with edit / copy / share / delete.
+/// - Long press → contextual AppBar with selection mode.
+/// - Multi-selection: long press first, then tap to toggle others (Gmail pattern).
+///   Single selection: edit / copy / share / delete.
+///   Multi selection: copy / delete.
 /// - Inline editing with attachment replace / remove support.
 /// - Tap on image → fullscreen viewer. Tap on file → system app.
 /// - [scrollToEntryId]: when set, scrolls to and highlights the target entry
@@ -49,8 +52,11 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   final _focusNode = FocusNode();
   final _imagePicker = ImagePicker();
 
-  /// Non-null when an entry is selected via long press (contextual AppBar).
-  int? _selectedEntryId;
+  /// IDs of entries currently selected via long press / tap (multi-selection).
+  final Set<int> _selectedEntryIds = {};
+
+  /// Whether selection mode is active.
+  bool get _isSelecting => _selectedEntryIds.isNotEmpty;
 
   /// Non-null when the user is editing an existing entry (inline in input).
   int? _editingEntryId;
@@ -86,7 +92,18 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   }
 
   void _clearSelection() {
-    setState(() => _selectedEntryId = null);
+    setState(() => _selectedEntryIds.clear());
+  }
+
+  /// Toggles the selection state of a single entry.
+  void _toggleSelection(int entryId) {
+    setState(() {
+      if (_selectedEntryIds.contains(entryId)) {
+        _selectedEntryIds.remove(entryId);
+      } else {
+        _selectedEntryIds.add(entryId);
+      }
+    });
   }
 
   /// Cancels editing immediately without checking for unsaved changes.
@@ -275,9 +292,10 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   void _startEdit() {
     final entries =
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
-    if (entries == null || _selectedEntryId == null) return;
+    if (entries == null || _selectedEntryIds.length != 1) return;
 
-    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
+    final selectedId = _selectedEntryIds.first;
+    final data = entries.firstWhere((e) => e.entry.id == selectedId);
     final att = data.firstAttachment;
 
     AttachmentInfo? fileInfo;
@@ -292,8 +310,8 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     }
 
     setState(() {
-      _editingEntryId = _selectedEntryId;
-      _selectedEntryId = null;
+      _editingEntryId = selectedId;
+      _selectedEntryIds.clear();
       _attachedFile = fileInfo;
       _originalFile = fileInfo;
       _originalContent = data.entry.content;
@@ -305,13 +323,23 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     _focusNode.requestFocus();
   }
 
-  Future<void> _copyEntry() async {
+  /// Copies the content of selected entries to the clipboard.
+  ///
+  /// For single selection: copies the raw markdown content of that entry.
+  /// For multi-selection: joins content of all selected entries in
+  /// chronological order (oldest first), separated by newlines.
+  Future<void> _copyEntries() async {
     final entries =
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
-    if (entries == null || _selectedEntryId == null) return;
+    if (entries == null || _selectedEntryIds.isEmpty) return;
 
-    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
-    await Clipboard.setData(ClipboardData(text: data.entry.content));
+    final selected = entries
+        .where((e) => _selectedEntryIds.contains(e.entry.id))
+        .toList()
+      ..sort((a, b) => a.entry.createdAt.compareTo(b.entry.createdAt));
+
+    final text = selected.map((e) => e.entry.content).join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
     _clearSelection();
 
     if (mounted) {
@@ -327,9 +355,10 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   Future<void> _shareEntry() async {
     final entries =
         ref.read(entryListProvider(widget.topicId)).valueOrNull;
-    if (entries == null || _selectedEntryId == null) return;
+    if (entries == null || _selectedEntryIds.length != 1) return;
 
-    final data = entries.firstWhere((e) => e.entry.id == _selectedEntryId);
+    final selectedId = _selectedEntryIds.first;
+    final data = entries.firstWhere((e) => e.entry.id == selectedId);
     _clearSelection();
 
     // Share file + text or just text.
@@ -344,22 +373,49 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     }
   }
 
-  Future<void> _deleteEntry() async {
-    if (_selectedEntryId == null) return;
+  /// Deletes all selected entries with confirmation.
+  ///
+  /// Shows the count in the confirmation dialog for multi-selection.
+  Future<void> _deleteEntries() async {
+    if (_selectedEntryIds.isEmpty) return;
+
+    final count = _selectedEntryIds.length;
+    final message = count == 1
+        ? 'Запись будет удалена безвозвратно.'
+        : '${_pluralEntries(count)} будут удалены безвозвратно.';
 
     final confirmed = await showDeleteConfirmation(
       context,
-      title: 'Удалить запись?',
-      message: 'Запись будет удалена безвозвратно.',
+      title: count == 1 ? 'Удалить запись?' : 'Удалить записи?',
+      message: message,
     );
 
     if (confirmed == true) {
-      final entryId = _selectedEntryId!;
+      final ids = Set<int>.from(_selectedEntryIds);
       _clearSelection();
-      await ref
-          .read(entryListProvider(widget.topicId).notifier)
-          .deleteEntry(entryId);
+
+      if (ids.length == 1) {
+        await ref
+            .read(entryListProvider(widget.topicId).notifier)
+            .deleteEntry(ids.first);
+      } else {
+        await ref
+            .read(entryListProvider(widget.topicId).notifier)
+            .deleteEntries(ids);
+      }
     }
+  }
+
+  /// Russian pluralisation for the delete confirmation message.
+  static String _pluralEntries(int count) {
+    final mod10 = count % 10;
+    final mod100 = count % 100;
+
+    if (mod10 == 1 && mod100 != 11) return '$count запись';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+      return '$count записи';
+    }
+    return '$count записей';
   }
 
   void _openImageViewer(EntryWithAttachment data) {
@@ -390,32 +446,42 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
   // ---------------------------------------------------------------------------
 
   PreferredSizeWidget _buildAppBar() {
-    if (_selectedEntryId != null) {
+    if (_isSelecting) {
+      final count = _selectedEntryIds.length;
+      final isSingle = count == 1;
+
       return AppBar(
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: _clearSelection,
         ),
+        title: isSingle ? null : Text('Выбрано: $count'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: 'Редактировать',
-            onPressed: _startEdit,
-          ),
+          // Edit — only for single selection.
+          if (isSingle)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'Редактировать',
+              onPressed: _startEdit,
+            ),
+          // Copy — always available.
           IconButton(
             icon: const Icon(Icons.copy_outlined),
             tooltip: 'Копировать',
-            onPressed: _copyEntry,
+            onPressed: _copyEntries,
           ),
-          IconButton(
-            icon: const Icon(Icons.share_outlined),
-            tooltip: 'Поделиться',
-            onPressed: _shareEntry,
-          ),
+          // Share — only for single selection.
+          if (isSingle)
+            IconButton(
+              icon: const Icon(Icons.share_outlined),
+              tooltip: 'Поделиться',
+              onPressed: _shareEntry,
+            ),
+          // Delete — always available.
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: 'Удалить',
-            onPressed: _deleteEntry,
+            onPressed: _deleteEntries,
           ),
         ],
       );
@@ -429,7 +495,7 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     final entriesAsync = ref.watch(entryListProvider(widget.topicId));
 
     return PopScope(
-      canPop: _selectedEntryId == null && _editingEntryId == null,
+      canPop: !_isSelecting && _editingEntryId == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_editingEntryId != null) {
@@ -472,23 +538,32 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
                           const Divider(height: 1),
                       itemBuilder: (context, index) {
                         final data = entries[index];
+                        final entryId = data.entry.id;
                         final isScrollTarget =
-                            data.entry.id == widget.scrollToEntryId &&
+                            entryId == widget.scrollToEntryId &&
                                 !_hasScrolledToTarget;
 
                         return EntryBubble(
                           key: isScrollTarget ? _scrollTargetKey : null,
                           data: data,
-                          isSelected: data.entry.id == _selectedEntryId,
+                          isSelected: _selectedEntryIds.contains(entryId),
                           isHighlighted:
-                              data.entry.id == _highlightedEntryId,
+                              entryId == _highlightedEntryId,
+                          onTap: _isSelecting && entryId != null
+                              ? () => _toggleSelection(entryId)
+                              : null,
                           onLongPress: () {
                             if (_editingEntryId != null) _forceCancelEdit();
-                            setState(
-                                () => _selectedEntryId = data.entry.id);
+                            if (entryId != null) {
+                              _toggleSelection(entryId);
+                            }
                           },
-                          onImageTap: () => _openImageViewer(data),
-                          onFileTap: () => _openFile(data),
+                          onImageTap: _isSelecting
+                              ? null
+                              : () => _openImageViewer(data),
+                          onFileTap: _isSelecting
+                              ? null
+                              : () => _openFile(data),
                         );
                       },
                     );

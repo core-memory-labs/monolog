@@ -18,10 +18,12 @@ import 'link_preview_card.dart';
 ///
 /// [isSelected] highlights the entry for the contextual AppBar selection.
 /// [isHighlighted] briefly highlights the entry when scrolled to from search.
+/// [onTap] is used in multi-selection mode to toggle selection on regular tap.
 class EntryBubble extends StatelessWidget {
   final EntryWithAttachment data;
   final bool isSelected;
   final bool isHighlighted;
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final VoidCallback? onImageTap;
   final VoidCallback? onFileTap;
@@ -31,6 +33,7 @@ class EntryBubble extends StatelessWidget {
     required this.data,
     this.isSelected = false,
     this.isHighlighted = false,
+    this.onTap,
     this.onLongPress,
     this.onImageTap,
     this.onFileTap,
@@ -56,6 +59,7 @@ class EntryBubble extends StatelessWidget {
     }
 
     return GestureDetector(
+      onTap: onTap,
       onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 600),
