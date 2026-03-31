@@ -27,6 +27,10 @@
 
 *В процессе публикации*
 
+### Сбилженные релизы
+
+[https://github.com/core-memory-labs/monolog/releases](https://github.com/core-memory-labs/monolog/releases)
+
 ### Сборка из исходников
 
 **Требования:**
