@@ -15,10 +15,10 @@ import 'database_service.dart';
 /// SQLite-backed implementation of [DatabaseService].
 ///
 /// Uses `sqflite_common_ffi` + `sqlite3_flutter_libs` for FTS5 support.
-/// Database schema is version 5.
+/// Database schema is version 6.
 class SqliteDatabaseService implements DatabaseService {
   static const _databaseName = 'monolog.db';
-  static const _databaseVersion = 5;
+  static const _databaseVersion = 6;
 
   Database? _database;
 
@@ -61,6 +61,7 @@ class SqliteDatabaseService implements DatabaseService {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
         is_pinned INTEGER NOT NULL DEFAULT 0,
+        icon TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -106,6 +107,10 @@ class SqliteDatabaseService implements DatabaseService {
       await _createFts5Table(db);
       // Populate FTS5 index from existing entries.
       await _populateFts5Index(db);
+    }
+
+    if (oldVersion < 6) {
+      await db.execute('ALTER TABLE topics ADD COLUMN icon TEXT');
     }
   }
 
@@ -270,6 +275,20 @@ class SqliteDatabaseService implements DatabaseService {
       'topics',
       {
         'is_pinned': isPinned ? 1 : 0,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<void> updateTopicIcon(int id, String? icon) async {
+    final db = await database;
+    await db.update(
+      'topics',
+      {
+        'icon': icon,
         'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'id = ?',

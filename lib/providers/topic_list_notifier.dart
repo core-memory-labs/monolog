@@ -5,8 +5,9 @@ import 'providers.dart';
 
 /// Manages the list of topics with their stats.
 ///
-/// Every mutation (add, rename, delete, pin toggle) re-fetches the full list
-/// from the database. For a local SQLite database this is near-instant.
+/// Every mutation (add, rename, delete, pin toggle, icon change) re-fetches
+/// the full list from the database. For a local SQLite database this is
+/// near-instant.
 class TopicListNotifier extends AsyncNotifier<List<TopicWithStats>> {
   @override
   Future<List<TopicWithStats>> build() {
@@ -39,6 +40,14 @@ class TopicListNotifier extends AsyncNotifier<List<TopicWithStats>> {
   Future<void> togglePin(int id, {required bool isPinned}) async {
     final db = ref.read(databaseServiceProvider);
     await db.togglePin(id, isPinned: isPinned);
+    ref.invalidateSelf();
+    await future;
+  }
+
+  /// Updates the topic icon (emoji). Pass `null` to remove the icon.
+  Future<void> setTopicIcon(int id, String? icon) async {
+    final db = ref.read(databaseServiceProvider);
+    await db.updateTopicIcon(id, icon);
     ref.invalidateSelf();
     await future;
   }

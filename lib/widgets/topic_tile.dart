@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../models/topic_with_stats.dart';
 import '../utils/date_format.dart';
+import 'topic_avatar.dart';
 
 /// A single topic row in the topic list.
 ///
-/// Shows: title, entry count, last activity date, and a pin indicator.
-/// [onTap] is called for navigation, [onLongPress] to enter selection mode.
-/// When [isSelected] is true the tile gets a highlighted background.
+/// Shows: avatar (emoji or letter), title, entry count, last activity date,
+/// and a pin indicator. [onTap] is called for navigation, [onLongPress] to
+/// enter selection mode. When [isSelected] is true the tile gets a
+/// highlighted background.
 class TopicTile extends StatelessWidget {
   final TopicWithStats data;
   final VoidCallback? onTap;
@@ -34,15 +36,20 @@ class TopicTile extends StatelessWidget {
       selected: isSelected,
       selectedTileColor:
           theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-      leading: topic.isPinned
-          ? Icon(Icons.push_pin, size: 20, color: theme.colorScheme.primary)
-          : const SizedBox(width: 20),
+      leading: TopicAvatar(
+        title: topic.title,
+        icon: topic.icon,
+        size: 40,
+      ),
       title: Text(
         topic.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text('$countLabel · $dateLabel'),
+      trailing: topic.isPinned
+          ? Icon(Icons.push_pin, size: 18, color: theme.colorScheme.primary)
+          : null,
       onTap: onTap,
       onLongPress: onLongPress,
     );

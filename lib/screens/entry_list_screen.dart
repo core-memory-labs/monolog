@@ -9,11 +9,14 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/entry_with_attachment.dart';
 import '../providers/entry_list_notifier.dart';
+import '../providers/topic_list_notifier.dart';
 import '../utils/dialogs.dart';
 import '../utils/file_utils.dart';
 import '../widgets/entry_bubble.dart';
 import '../widgets/entry_input.dart';
+import '../widgets/topic_avatar.dart';
 import 'image_viewer_screen.dart';
+import 'topic_detail_screen.dart';
 
 /// Displays the feed of entries within a topic.
 ///
@@ -26,6 +29,7 @@ import 'image_viewer_screen.dart';
 ///   Multi selection: copy / delete.
 /// - Inline editing with attachment replace / remove support.
 /// - Tap on image → fullscreen viewer. Tap on file → system app.
+/// - Tap on title → TopicDetailScreen (Telegram-style topic info).
 /// - [scrollToEntryId]: when set, scrolls to and highlights the target entry
 ///   (used for navigation from search results).
 class EntryListScreen extends ConsumerStatefulWidget {
@@ -441,6 +445,15 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
     await OpenFilex.open(att.filePath, type: att.mimeType);
   }
 
+  void _openTopicDetail() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TopicDetailScreen(topicId: widget.topicId),
+      ),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
@@ -487,7 +500,33 @@ class _EntryListScreenState extends ConsumerState<EntryListScreen> {
       );
     }
 
-    return AppBar(title: Text(widget.topicTitle));
+    // Reactive title and icon from the provider.
+    final topicsAsync = ref.watch(topicListProvider);
+    final currentTopic = topicsAsync.valueOrNull
+        ?.where((t) => t.topic.id == widget.topicId)
+        .firstOrNull;
+    final displayTitle = currentTopic?.topic.title ?? widget.topicTitle;
+    final displayIcon = currentTopic?.topic.icon;
+
+    return AppBar(
+      title: GestureDetector(
+        onTap: _openTopicDetail,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TopicAvatar(title: displayTitle, icon: displayIcon, size: 32),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                displayTitle,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override

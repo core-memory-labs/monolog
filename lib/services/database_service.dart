@@ -48,6 +48,10 @@ abstract class DatabaseService {
   /// Pins or unpins the topic with [id].
   Future<void> togglePin(int id, {required bool isPinned});
 
+  /// Updates the icon (emoji) of the topic with [id].
+  /// Pass `null` to remove the icon (revert to default avatar).
+  Future<void> updateTopicIcon(int id, String? icon);
+
   // ---------------------------------------------------------------------------
   // Entries CRUD
   // ---------------------------------------------------------------------------

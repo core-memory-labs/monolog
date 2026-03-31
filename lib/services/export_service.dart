@@ -95,6 +95,7 @@ class ExportService {
       topicsJson.add({
         'title': topic.title,
         'is_pinned': topic.isPinned,
+        'icon': topic.icon,
         'created_at': topic.createdAt.toIso8601String(),
         'updated_at': topic.updatedAt.toIso8601String(),
         'entries': entriesJson,

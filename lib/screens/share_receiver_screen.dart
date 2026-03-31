@@ -9,6 +9,7 @@ import '../providers/topic_list_notifier.dart';
 import '../providers/providers.dart';
 import '../utils/file_utils.dart';
 import '../widgets/file_card.dart';
+import '../widgets/topic_avatar.dart';
 
 /// Screen for saving shared content (image, file, or text) from another app.
 ///
@@ -289,11 +290,11 @@ class _ShareReceiverScreenState extends ConsumerState<ShareReceiverScreen> {
                       final topic = data.topic;
 
                       return ListTile(
-                        leading: topic.isPinned
-                            ? Icon(Icons.push_pin,
-                                size: 20,
-                                color: theme.colorScheme.primary)
-                            : const SizedBox(width: 20),
+                        leading: TopicAvatar(
+                          title: topic.title,
+                          icon: topic.icon,
+                          size: 40,
+                        ),
                         title: Text(
                           topic.title,
                           maxLines: 1,
