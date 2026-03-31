@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Политика конфиденциальности — Monolog</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #1a1a1a;
+            --muted: #666666;
+            --border: #e0e0e0;
+            --accent: #2196F3;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1a1a1a;
+                --text: #e0e0e0;
+                --muted: #999999;
+                --border: #333333;
+                --accent: #64B5F6;
+            }
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background-color: var(--bg);
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+        
+        h1 {
+            font-size: 1.75rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        h2 {
+            font-size: 1.25rem;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        h3 {
+            font-size: 1.1rem;
+            margin-top: 1.5rem;
+        }
+        
+        .meta {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+        }
+        
+        p, ul, ol {
+            margin-bottom: 1rem;
+        }
+        
+        ul {
+            padding-left: 1.5rem;
+        }
+        
+        li {
+            margin-bottom: 0.5rem;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.95rem;
+        }
+        
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border: 1px solid var(--border);
+        }
+        
+        th {
+            background-color: var(--border);
+        }
+        
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        a:hover {
+            text-decoration: underline;
+        }
+        
+        .highlight {
+            background-color: var(--border);
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2rem 0;
+        }
+        
+        footer {
+            margin-top: 3rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Политика конфиденциальности</h1>
+    
+    <div class="meta">
+        <p><strong>Приложение:</strong> Monolog<br>
+        <strong>Разработчик:</strong> Core Memory Labs<br>
+        <strong>Последнее обновление:</strong> <span id="date"></span></p>
+    </div>
+    
+    <script>
+        document.getElementById('date').textContent = new Date().toLocaleDateString('ru-RU');
+    </script>
+
+    <h2>1. Общие положения</h2>
+    <p>Настоящая Политика конфиденциальности описывает, как приложение Monolog обрабатывает данные пользователей.</p>
+    <div class="highlight">
+        <strong>Главное:</strong> Monolog — это локальный приватный блокнот, который хранит все данные исключительно на устройстве пользователя. Приложение не собирает, не передаёт и не хранит персональные данные на внешних серверах.
+    </div>
+
+    <h2>2. Какие данные обрабатывает приложение</h2>
+    
+    <h3>2.1. Данные, создаваемые пользователем</h3>
+    <p>Приложение хранит следующие данные, которые создаёт сам пользователь:</p>
+    <ul>
+        <li>Текстовые записи (заметки)</li>
+        <li>Топики (категории для организации записей)</li>
+        <li>Прикреплённые файлы и изображения</li>
+        <li>Настройки приложения (выбор темы оформления)</li>
+    </ul>
+    <p><strong>Все эти данные хранятся локально на устройстве пользователя</strong> в защищённой директории приложения и не передаются третьим лицам.</p>
+
+    <h3>2.2. Данные, получаемые из других приложений</h3>
+    <p>При использовании функции «Поделиться» (Share Intent) приложение может получать текст, изображения, файлы и URL-адреса из других приложений. Эти данные сохраняются локально в записях пользователя.</p>
+
+    <h3>2.3. Сетевые запросы</h3>
+    <p>Приложение выполняет сетевые запросы только для загрузки превью ссылок (OpenGraph-метаданные):</p>
+    <ul>
+        <li>Запрашиваются только публично доступные веб-страницы</li>
+        <li>Загружаются только заголовок, описание и изображение превью</li>
+        <li>Данные кэшируются локально на устройстве</li>
+        <li>Никакие персональные данные пользователя не передаются</li>
+    </ul>
+
+    <h2>3. Какие данные НЕ собирает приложение</h2>
+    <p>Приложение <strong>не собирает и не передаёт</strong>:</p>
+    <ul>
+        <li>Персональные данные (имя, email, телефон)</li>
+        <li>Данные геолокации</li>
+        <li>Идентификаторы устройства</li>
+        <li>Данные об использовании приложения (аналитика)</li>
+        <li>Рекламные идентификаторы</li>
+        <li>Информацию о контактах или календаре</li>
+    </ul>
+
+    <h2>4. Хранение данных</h2>
+    <p>Все данные хранятся в локальной базе данных SQLite в защищённой директории приложения. Доступ к этим данным имеет только само приложение.</p>
+    <p>Пользователь может экспортировать свои данные в ZIP-архив. При удалении приложения все данные удаляются автоматически.</p>
+
+    <h2>5. Разрешения приложения</h2>
+    <table>
+        <tr>
+            <th>Разрешение</th>
+            <th>Назначение</th>
+        </tr>
+        <tr>
+            <td>Камера</td>
+            <td>Съёмка фото для прикрепления к записям</td>
+        </tr>
+        <tr>
+            <td>Доступ к файлам/фото</td>
+            <td>Выбор изображений и файлов из галереи</td>
+        </tr>
+        <tr>
+            <td>Интернет</td>
+            <td>Загрузка превью ссылок (OpenGraph)</td>
+        </tr>
+    </table>
+
+    <h2>6. Передача данных третьим лицам</h2>
+    <p>Приложение <strong>не передаёт</strong> данные пользователей третьим лицам, рекламным сетям, аналитическим сервисам или любым другим внешним службам.</p>
+
+    <h2>7. Права пользователя</h2>
+    <p>Пользователь имеет полный контроль над своими данными:</p>
+    <ul>
+        <li><strong>Доступ:</strong> все данные доступны внутри приложения</li>
+        <li><strong>Экспорт:</strong> функция экспорта в ZIP-архив</li>
+        <li><strong>Удаление:</strong> можно удалить любые записи или всё приложение</li>
+        <li><strong>Изменение:</strong> можно редактировать любые записи</li>
+    </ul>
+
+    <h2>8. Открытый исходный код</h2>
+    <p>Исходный код приложения открыт и доступен для аудита:</p>
+    <p><a href="https://github.com/core-memory-labs/monolog">github.com/core-memory-labs/monolog</a></p>
+
+    <h2>9. Контакты</h2>
+    <p>Если у вас есть вопросы, свяжитесь с нами:</p>
+    <ul>
+        <li><strong>GitHub:</strong> <a href="https://github.com/core-memory-labs/monolog/issues">Issues</a></li>
+    </ul>
+
+    <hr>
+
+    <footer>
+        <p>Эта политика конфиденциальности составлена в соответствии с требованиями законодательства Российской Федерации о персональных данных.</p>
+        <p>© Core Memory Labs</p>
+    </footer>
+</body>
+</html>
