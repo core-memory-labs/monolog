@@ -44,7 +44,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Flutter
-        uses: subosheep/flutter-action@v2
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.38.3'
           channel: 'stable'
