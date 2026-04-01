@@ -23,9 +23,9 @@
 
 ## Установка
 
-### Google Play
+### RuStore
 
-*В процессе публикации*
+[Страница приложения Monolog на RuStore](https://www.rustore.ru/catalog/app/com.corememorylabs.monolog)
 
 ### Сбилженные релизы
 
